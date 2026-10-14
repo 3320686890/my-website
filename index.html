@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light" class="gate-on">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>fly · 一个大一新生</title>
+<meta name="description" content="fly 的个人主页 —— 大一新生 / Python / 架子鼓 / 滑板 / 羽毛球 / 崩坏3 · 绝区零 · 卡拉彼丘">
+<link rel="icon" href="assets/fly-icon.jpg">
+
+<!-- 主题：首屏绘制前置入，避免白闪 -->
+<script>
+/* 标记 JS 可用：样式里靠它决定「初始隐藏」是否生效，
+   这样即使脚本被禁用，内容也会正常显示，不会白屏。 */
+(function () { document.documentElement.classList.add('js'); })();
+(function () {
+  try {
+    var t = localStorage.getItem('theme') ||
+            (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    document.documentElement.setAttribute('data-theme', t);
+  } catch (e) {}
+})();
+</script>
+
+<!-- 字体自托管：不依赖任何外部域名。
+     原来直接引 fonts.googleapis.com，在国内手机网络下这个请求会一直挂着，
+     而它是渲染阻塞资源 —— 表现就是打开后一直白屏。
+     现在改用 assets/fonts/ 里的分片（按 unicode-range 只加载用到的部分）。 -->
+<link rel="preload" as="style" href="assets/fonts/fonts.css">
+<link rel="stylesheet" href="assets/fonts/fonts.css">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ============================================================
+     入场门：上滑打开 → 3 秒挑战 → 进入主页
+     ============================================================ -->
+<div class="gate" id="gate">
+
+  <!-- 第 1 关：上滑 -->
+  <section class="gate-scene" id="sceneSwipe" data-scene="swipe">
+    <div class="gate-bg" aria-hidden="true">
+      <span class="gate-blob gb-1"></span>
+      <span class="gate-blob gb-2"></span>
+      <canvas id="gateCanvas"></canvas>
+    </div>
+
+    <div class="swipe-hint">
+      <div class="swipe-track" aria-hidden="true">
+        <span class="swipe-dot" id="swipeDot">↑</span>
+      </div>
+      <p class="swipe-text">向上滑 · 打开我的小站</p>
+      <p class="swipe-sub">手机直接往上拖，电脑按住鼠标往上拖</p>
+    </div>
+
+    <div class="swipe-progress" aria-hidden="true"><i id="swipeBar"></i></div>
+
+    <div class="gate-brand">
+      <img src="assets/fly-avatar.jpg" alt="" width="220" height="209">
+      <span>fly</span>
+    </div>
+  </section>
+
+  <!-- 第 2 关：3 秒挑战 -->
+  <section class="gate-scene" id="sceneHold" data-scene="hold" hidden>
+    <div class="gate-bg" aria-hidden="true">
+      <span class="gate-blob gb-1"></span>
+      <span class="gate-blob gb-2"></span>
+      <span class="gate-grid"></span>
+    </div>
+
+    <div class="chal">
+      <header class="chal-head">
+        <span class="chal-badge"><i class="pulse-dot"></i> 人机验证</span>
+        <h2 class="chal-title">证明你是个有耐心的人</h2>
+        <p class="chal-desc">按住下面的按钮开始计时，在 <strong>3 秒</strong> 的时候松手</p>
+      </header>
+
+      <div class="chal-clock" id="chalClock">
+        <svg class="clock-ring" viewBox="0 0 200 200" aria-hidden="true">
+          <circle class="ring-track" cx="100" cy="100" r="88"></circle>
+          <circle class="ring-fill"  cx="100" cy="100" r="88" id="ringFill"></circle>
+        </svg>
+        <div class="clock-read">
+          <span class="clock-num" id="clockNum">0.00</span>
+          <span class="clock-unit">秒</span>
+        </div>
+        <span class="clock-tag" id="clockTag">待机</span>
+      </div>
+
+      <button class="hold-btn" id="holdBtn" type="button">
+        <span class="hold-ring" aria-hidden="true"></span>
+        <span class="hold-face">
+          <span class="hold-icon" aria-hidden="true"></span>
+          <span class="hold-label" id="holdLabel">按住</span>
+        </span>
+      </button>
+
+      <p class="chal-note">在 <b>2 秒 ~ 4 秒</b> 之间松手就能通过，差了就得重来</p>
+      <p class="chal-status" id="chalStatus" role="status" aria-live="polite"></p>
+      <p class="chal-foot" id="chalFoot" hidden>嘿嘿，咱就单纯想控你 3 秒，略略略</p>
+    </div>
+  </section>
+
+  <!-- 通关瞬间 -->
+  <div class="gate-done" id="gateDone" hidden aria-hidden="true">
+    <span class="done-check">✓</span>
+    <p class="done-text">验证通过，欢迎光临</p>
+  </div>
+</div>
+
+<!-- ============================================================
+     主站
+     ============================================================ -->
+<div class="site" id="site" aria-hidden="true">
+
+<div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+
+<div class="bg-deco" aria-hidden="true">
+  <span class="blob blob-1"></span>
+  <span class="blob blob-2"></span>
+  <span class="blob blob-3"></span>
+  <canvas id="particles"></canvas>
+</div>
+
+<a class="skip-link" href="#about">跳到正文</a>
+
+<header class="nav" id="nav">
+  <div class="nav-inner">
+    <a class="brand" href="#top">
+      <img src="assets/fly-avatar.jpg" alt="" class="brand-avatar" width="38" height="38">
+      <span class="brand-name">fly</span>
+    </a>
+
+    <nav class="nav-links" id="navLinks" aria-label="主导航">
+      <a href="#about">关于我</a>
+      <a href="#games">在玩的</a>
+      <a href="#skills">会的东西</a>
+      <a href="#projects">项目</a>
+      <a href="#game">小游戏</a>
+      <a href="#contact">找我玩</a>
+    </nav>
+
+    <button class="theme-btn" id="themeBtn" type="button" aria-label="切换深浅色主题" title="切换主题">
+      <span class="theme-icon" aria-hidden="true"></span>
+    </button>
+
+    <button class="nav-toggle" id="navToggle" type="button" aria-label="打开菜单" aria-expanded="false" aria-controls="navLinks">
+      <span></span><span></span>
+    </button>
+  </div>
+</header>
+
+<nav class="dots" id="dots" aria-label="区块导航">
+  <a href="#top"      data-label="首屏"></a>
+  <a href="#about"    data-label="关于我"></a>
+  <a href="#games"    data-label="在玩的"></a>
+  <a href="#skills"   data-label="会的东西"></a>
+  <a href="#projects" data-label="项目"></a>
+  <a href="#game"     data-label="小游戏"></a>
+  <a href="#posts"    data-label="碎碎念"></a>
+  <a href="#contact"  data-label="找我玩"></a>
+</nav>
+
+<main id="top">
+
+  <!-- ==================== 首屏 ==================== -->
+  <section class="hero">
+    <div class="hero-inner">
+      <div class="hero-text">
+        <p class="hero-kicker anim" data-anim="up">🎓 大一新生 · 刚开学没多久</p>
+        <h1 class="hero-title anim" data-anim="up" data-delay="1">
+          嗨，我是<span class="grad-text">fly</span>
+        </h1>
+        <p class="hero-typing anim" data-anim="up" data-delay="2">
+          <span id="typing"></span><span class="caret" aria-hidden="true"></span>
+        </p>
+        <p class="hero-desc anim" data-anim="up" data-delay="3">
+          刚上大学，正在把生活过成自己喜欢的样子。<br>
+          敲点代码、打打鼓、滑滑板，顺便在游戏里当个老玩家。
+        </p>
+
+        <div class="hero-actions anim" data-anim="up" data-delay="4">
+          <a class="btn btn-primary" href="#about" data-magnetic>认识一下我</a>
+          <a class="btn btn-ghost" href="#game" data-magnetic>玩个小游戏 →</a>
+        </div>
+
+        <ul class="hero-tags anim" data-anim="up" data-delay="5">
+          <li>🐍 Python</li>
+          <li>🥁 架子鼓</li>
+          <li>🛹 滑板</li>
+          <li>🏸 羽毛球</li>
+          <li>🎮 老玩家</li>
+        </ul>
+      </div>
+
+      <div class="hero-art anim" data-anim="scale" data-delay="2">
+        <div class="art-bob">
+          <div class="art-frame" data-tilt>
+            <img src="assets/fly.jpg" alt="fly 的 Q 版形象" width="560" height="531" fetchpriority="high">
+            <span class="art-badge">本命 · 蓝发小军帽</span>
+          </div>
+        </div>
+        <button class="art-float float-1 music-btn" id="musicBtn" type="button" aria-label="播放背景音乐" title="点一下放首歌"><span class="music-icon">🎧</span><span class="music-wave" aria-hidden="true"><i></i><i></i><i></i></span></button>
+        <span class="art-float float-2" aria-hidden="true">⭐</span>
+        <span class="art-float float-3" aria-hidden="true">🎮</span>
+      </div>
+    </div>
+
+    <a class="scroll-hint" href="#about" aria-label="向下滚动"><span></span></a>
+  </section>
+
+  <!-- ==================== 01 关于我 ==================== -->
+  <section class="section" id="about">
+    <header class="section-head">
+      <h2 class="section-title anim" data-anim="up"><span>01</span> 关于我</h2>
+      <p class="section-sub anim" data-anim="up" data-delay="1">刚进大学的新生一枚，随便看看～</p>
+    </header>
+
+    <div class="about-grid">
+      <div class="card card-about anim" data-anim="up">
+        <h3>👋 自我介绍</h3>
+        <p>你好呀，我是 <strong>fly</strong>，一个刚上大一的普通学生。</p>
+        <p>
+          高中那会儿就一直想学点正经的技术，现在终于有空了，于是从 Python 开始。
+          目前写的东西还很稚嫩，但每跑通一个程序都挺开心的。
+        </p>
+        <p>
+          除了敲代码，我还打鼓、玩滑板、打羽毛球 —— 基本上属于「什么好玩都想试试」的类型。
+          游戏也是老本行，崩坏3 断断续续玩了好几年。
+        </p>
+        <p>
+          这个页面是我自己一点点搭起来的，没有用框架，
+          就是想弄明白一个网页到底是怎么从零长出来的。
+        </p>
+      </div>
+
+      <div class="card card-info anim" data-anim="up" data-delay="1">
+        <h3>📋 个人档案</h3>
+        <ul class="info-list">
+          <li><span class="k">昵称</span><span class="v">fly</span></li>
+          <li><span class="k">身份</span><span class="v">大一新生</span></li>
+          <li><span class="k">方向</span><span class="v">在摸索，偏计算机</span></li>
+          <li><span class="k">属性</span><span class="v">好奇 / 慢热 / 能熬夜</span></li>
+          <li><span class="k">本命</span><span class="v">蓝发小军帽</span></li>
+          <li><span class="k">本命色</span><span class="v">深蓝 · 亮黄</span></li>
+          <li><span class="k">口头禅</span><span class="v">「让我再试一次」</span></li>
+          <li><span class="k">当前状态</span><span class="v"><i class="dot"></i> 在线折腾</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card card-skills anim" data-anim="up" data-delay="2">
+      <h3>📈 能力值（自评，图一乐）</h3>
+      <div class="skills">
+        <div class="skill"><div class="skill-head"><span>🐍 Python</span><span class="skill-val">62</span></div><div class="bar"><i style="--w:62%"></i></div></div>
+        <div class="skill"><div class="skill-head"><span>🥁 架子鼓</span><span class="skill-val">70</span></div><div class="bar"><i style="--w:70%"></i></div></div>
+        <div class="skill"><div class="skill-head"><span>🛹 滑板</span><span class="skill-val">48</span></div><div class="bar"><i style="--w:48%"></i></div></div>
+        <div class="skill"><div class="skill-head"><span>🏸 羽毛球</span><span class="skill-val">66</span></div><div class="bar"><i style="--w:66%"></i></div></div>
+        <div class="skill"><div class="skill-head"><span>🎮 打游戏</span><span class="skill-val">85</span></div><div class="bar"><i style="--w:85%"></i></div></div>
+        <div class="skill"><div class="skill-head"><span>😴 熬夜</span><span class="skill-val">90</span></div><div class="bar"><i style="--w:90%"></i></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== 02 在玩的游戏 ==================== -->
+  <section class="section" id="games">
+    <header class="section-head">
+      <h2 class="section-title anim" data-anim="up"><span>02</span> 在玩的游戏</h2>
+      <p class="section-sub anim" data-anim="up" data-delay="1">陪了我挺久的三个世界。</p>
+    </header>
+
+    <div class="game-grid">
+      <article class="card game-card anim" data-anim="up" data-tilt>
+        <div class="game-icon">⚔️</div>
+        <h3>崩坏3</h3>
+        <p class="game-slogan">崩三不倒，陪你到老</p>
+        <p class="game-desc">断断续续玩了好几年，从高中一直陪到现在。剧情是真的会让人记很久，角色也一个个都舍不得。</p>
+        <div class="chips"><span class="chip">老玩家</span><span class="chip">剧情党</span><span class="chip">常驻</span></div>
+      </article>
+
+      <article class="card game-card anim" data-anim="up" data-delay="1" data-tilt>
+        <div class="game-icon">🌃</div>
+        <h3>绝区零</h3>
+        <p class="game-slogan">新艾丽都永不落幕</p>
+        <p class="game-desc">喜欢它的美术和手感，打起来特别爽。新艾丽都的街道我基本都逛遍了，连角落的涂鸦都看过。</p>
+        <div class="chips"><span class="chip">动作</span><span class="chip">美术党</span><span class="chip">日常打卡</span></div>
+      </article>
+
+      <article class="card game-card anim" data-anim="up" data-delay="2" data-tilt>
+        <div class="game-icon">🎯</div>
+        <h3>卡拉彼丘</h3>
+        <p class="game-slogan">卡拉彼丘还没似喵</p>
+        <p class="game-desc">纸片人射击这个点子太妙了。枪法一般，但换弹和走位有点小心得，偶尔也能 carry 一把。</p>
+        <div class="chips"><span class="chip">射击</span><span class="chip">二次元</span><span class="chip">还在玩</span></div>
+      </article>
+    </div>
+  </section>
+
+  <!-- ==================== 03 会的东西 ==================== -->
+  <section class="section" id="skills">
+    <header class="section-head">
+      <h2 class="section-title anim" data-anim="up"><span>03</span> 会的东西</h2>
+      <p class="section-sub anim" data-anim="up" data-delay="1">分成六类，每类都还在慢慢练。</p>
+    </header>
+
+    <div class="skill-cats">
+      <article class="card cat anim" data-anim="up">
+        <header class="cat-head">
+          <span class="cat-icon">💻</span>
+          <div><h3>技术</h3><p class="cat-sub">刚起步，正在认真学</p></div>
+        </header>
+        <ul class="cat-list">
+          <li><strong>Python</strong><span>从基础语法学到能写小项目，目前独立写出了猜数字这类程序</span></li>
+          <li><strong>HTML / CSS / JS</strong><span>看得懂、改得动。这个页面就是跟 Agent 一起做出来的，我在旁边学</span></li>
+          <li><strong>Git / GitHub</strong><span>会把代码传上去，正在习惯版本管理这套流程</span></li>
+        </ul>
+      </article>
+
+      <article class="card cat anim" data-anim="up" data-delay="1">
+        <header class="cat-head">
+          <span class="cat-icon">🥁</span>
+          <div><h3>音乐</h3><p class="cat-sub">打鼓的时候最专注</p></div>
+        </header>
+        <ul class="cat-list">
+          <li><strong>架子鼓</strong><span>主要爱好之一，节奏感是练出来的，也是最能解压的事</span></li>
+          <li><strong>听歌</strong><span>练鼓顺手攒了一堆歌单，写代码的时候也离不开背景音乐</span></li>
+          <li><strong>游戏音乐</strong><span>打游戏时会特意去听配乐，有些 boss 战的曲子比歌单还耐听</span></li>
+        </ul>
+      </article>
+
+      <article class="card cat anim" data-anim="up" data-delay="2">
+        <header class="cat-head">
+          <span class="cat-icon">🛹</span>
+          <div><h3>运动</h3><p class="cat-sub">动起来才不困</p></div>
+        </header>
+        <ul class="cat-list">
+          <li><strong>滑板</strong><span>还在练基本功的阶段，摔过几次但没放弃，滑顺一条线就很爽</span></li>
+          <li><strong>羽毛球</strong><span>约朋友打的那种，跑动多、出汗快，属于快乐运动</span></li>
+          <li><strong>夜跑</strong><span>晚上绕着操场跑几圈，跑完回宿舍洗澡睡觉，一天就算收尾了</span></li>
+        </ul>
+      </article>
+
+      <article class="card cat anim" data-anim="up" data-delay="3">
+        <header class="cat-head">
+          <span class="cat-icon">🌶️</span>
+          <div><h3>美食</h3><p class="cat-sub">无辣不欢</p></div>
+        </header>
+        <ul class="cat-list">
+          <li><strong>吃辣</strong><span>口味偏重，微辣对我来说是起点。火锅、麻辣香锅、水煮系列都来者不拒</span></li>
+          <li><strong>找好吃的</strong><span>新到一个地方先看哪家店排队，学校周边基本被我摸过一遍了</span></li>
+          <li><strong>夜宵</strong><span>晚上十一点之后的一碗面，是当天最好吃的一顿（这个习惯不太好）</span></li>
+        </ul>
+      </article>
+
+      <article class="card cat anim" data-anim="up" data-delay="4">
+        <header class="cat-head">
+          <span class="cat-icon">🎬</span>
+          <div><h3>宅家</h3><p class="cat-sub">不出门也很快乐</p></div>
+        </header>
+        <ul class="cat-list">
+          <li><strong>看番</strong><span>偏爱热血和日常两类，追更的时候一周里最期待的就是那天</span></li>
+          <li><strong>看电影</strong><span>周末窝在床上看一部，科幻和悬疑看得多一点</span></li>
+          <li><strong>刷视频</strong><span>说是休息，结果一刷一个小时。这个我承认是缺点</span></li>
+        </ul>
+      </article>
+
+      <article class="card cat anim" data-anim="up" data-delay="5">
+        <header class="cat-head">
+          <span class="cat-icon">🌙</span>
+          <div><h3>生活</h3><p class="cat-sub">一些没什么用但很开心的</p></div>
+        </header>
+        <ul class="cat-list">
+          <li><strong>打游戏</strong><span>老本行，见上面「在玩的」那一栏</span></li>
+          <li><strong>折腾电脑</strong><span>喜欢把桌面整理整齐，然后过两天再弄乱</span></li>
+          <li><strong>熬夜</strong><span>不是好习惯，但夜里效率是真的高（正在努力改）</span></li>
+        </ul>
+      </article>
+    </div>
+  </section>
+
+  <!-- ==================== 04 项目 ==================== -->
+  <section class="section" id="projects">
+    <header class="section-head">
+      <h2 class="section-title anim" data-anim="up"><span>04</span> 我的项目</h2>
+      <p class="section-sub anim" data-anim="up" data-delay="1">目前只有两个，但都是从零写出来的。</p>
+    </header>
+
+    <div class="proj-grid">
+      <article class="card proj anim" data-anim="up">
+        <div class="proj-top">
+          <span class="proj-icon">🔢</span>
+          <span class="proj-badge">已完成</span>
+        </div>
+        <h3>猜数字小游戏</h3>
+        <p>
+          用 Python 写的第一个完整小项目。程序随机出一个数字，你来猜，
+          每次告诉你猜大了还是猜小了，直到猜中为止。
+        </p>
+        <ul class="proj-points">
+          <li>随机数生成与输入校验</li>
+          <li>循环 + 条件判断的实战练习</li>
+          <li>统计猜测次数，给不同评价</li>
+        </ul>
+        <div class="proj-foot">
+          <div class="chips"><span class="chip">Python</span><span class="chip">入门项目</span></div>
+          <a class="btn btn-ghost btn-sm" href="https://github.com/3320686890" target="_blank" rel="noopener noreferrer" data-magnetic>
+            GitHub 主页 →
+          </a>
+        </div>
+      </article>
+
+      <article class="card proj anim" data-anim="up" data-delay="1">
+        <div class="proj-top">
+          <span class="proj-icon">🚧</span>
+          <span class="proj-badge badge-soon">进行中</span>
+        </div>
+        <h3>这个个人主页</h3>
+        <p>
+          你正在看的这个页面。我出想法、定内容、反复试，具体代码是跟 AI Agent
+          一起磨出来的 —— 每一版不满意就让它改，改到顺眼为止。
+        </p>
+        <ul class="proj-points">
+          <li>上滑入场 + 3 秒验证的小设计</li>
+          <li>深浅双主题、响应式布局</li>
+          <li>底下还塞了个贪吃蛇</li>
+          <li>用 Agent 生成，我来提需求和验收</li>
+        </ul>
+        <div class="proj-foot">
+          <div class="chips"><span class="chip">HTML</span><span class="chip">CSS</span><span class="chip">JavaScript</span></div>
+          <a class="btn btn-ghost btn-sm" href="#" data-todo="把这里换成这个页面的仓库地址" data-magnetic>
+            源码 →
+          </a>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- ==================== 05 小游戏 ==================== -->
+  <section class="section" id="game">
+    <header class="section-head">
+      <h2 class="section-title anim" data-anim="up"><span>05</span> 贪吃蛇</h2>
+      <p class="section-sub anim" data-anim="up" data-delay="1">
+        来都来了，玩一把再走呗。方向键 / WASD 控制，手机上直接滑屏幕。
+      </p>
+    </header>
+
+    <div class="card snake-card anim" data-anim="up">
+      <div class="snake-hud">
+        <div class="snake-stat"><span class="snake-k">得分</span><b id="snakeScore">0</b></div>
+        <div class="snake-stat"><span class="snake-k">最高</span><b id="snakeBest">0</b></div>
+        <div class="snake-stat"><span class="snake-k">速度</span><b id="snakeLevel">1</b></div>
+        <div class="snake-actions">
+          <button class="btn btn-ghost btn-sm" id="snakePause" type="button">暂停</button>
+          <button class="btn btn-ghost btn-sm" id="snakeRestart" type="button">重开</button>
+        </div>
+      </div>
+
+      <div class="snake-stage">
+        <canvas id="snake" width="480" height="480" aria-label="贪吃蛇游戏区域" role="img"></canvas>
+        <div class="snake-overlay" id="snakeOverlay">
+          <div class="snake-panel">
+            <p class="snake-big" id="snakeBig">准备好了吗</p>
+            <p class="snake-small" id="snakeSmall">方向键 / WASD 控制方向，手机可以滑动屏幕</p>
+            <button class="btn btn-primary" id="snakeStart" type="button" data-magnetic>开始游戏</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="dpad">
+        <button class="dpad-btn up"    type="button" data-dir="up"    aria-label="向上">↑</button>
+        <button class="dpad-btn left"  type="button" data-dir="left"  aria-label="向左">←</button>
+        <button class="dpad-btn down"  type="button" data-dir="down"  aria-label="向下">↓</button>
+        <button class="dpad-btn right" type="button" data-dir="right" aria-label="向右">→</button>
+      </div>
+
+      <p class="snake-tip">吃到金色的果子会变长，撞到自己或者墙就结束。分数越高速度越快。</p>
+    </div>
+  </section>
+
+  <!-- ==================== 06 碎碎念 ==================== -->
+  <section class="section" id="posts">
+    <header class="section-head">
+      <h2 class="section-title anim" data-anim="up"><span>06</span> 碎碎念</h2>
+      <p class="section-sub anim" data-anim="up" data-delay="1">
+        偶尔写点东西，点开就能看。
+      </p>
+    </header>
+    <div class="post-list" id="postList"></div>
+  </section>
+
+  <!-- ==================== 07 找我玩 ==================== -->
+  <section class="section section-last" id="contact">
+    <header class="section-head">
+      <h2 class="section-title anim" data-anim="up"><span>07</span> 找我玩</h2>
+      <p class="section-sub anim" data-anim="up" data-delay="1">想聊天、想组队、想交流代码，都可以来找我。</p>
+    </header>
+
+    <div class="contact-grid">
+      <button class="contact-card anim" data-anim="up" type="button" data-copy="yt18802460357">
+        <span class="contact-icon">💬</span>
+        <strong>微信</strong>
+        <span class="contact-handle">yt18802460357</span>
+        <span class="contact-hint">点击复制</span>
+      </button>
+      <a class="contact-card anim" data-anim="up" data-delay="1"
+         href="https://github.com/3320686890" target="_blank" rel="noopener noreferrer">
+        <span class="contact-icon">💻</span>
+        <strong>GitHub</strong>
+        <span class="contact-handle">3320686890</span>
+        <span class="contact-hint">去看看 →</span>
+      </a>
+      <button class="contact-card anim" data-anim="up" data-delay="2" type="button" data-copy="3320686890@qq.com">
+        <span class="contact-icon">✉️</span>
+        <strong>QQ 邮箱</strong>
+        <span class="contact-handle">3320686890@qq.com</span>
+        <span class="contact-hint">点击复制</span>
+      </button>
+      <button class="contact-card anim" data-anim="up" data-delay="3" type="button" id="pokeCard">
+        <span class="contact-icon">👉</span>
+        <strong>拍一拍我</strong>
+        <span class="contact-handle" id="pokeText">点一下试试</span>
+        <span class="contact-hint">嘿嘿</span>
+      </button>
+    </div>
+
+    <div class="card card-form anim" data-anim="up">
+      <h3>💬 给我留言</h3>
+      <p class="form-hint">
+        写点什么吧，提交之后会直接送到我这里，我会看的。
+      </p>
+
+      <form class="form" id="msgForm" novalidate>
+        <div class="field">
+          <label for="fName">你的称呼</label>
+          <input id="fName" name="name" type="text" maxlength="24" placeholder="怎么称呼你呀" autocomplete="nickname" required>
+          <small class="err" data-err-for="fName"></small>
+        </div>
+
+        <div class="field">
+          <label for="fMsg">想说的话</label>
+          <textarea id="fMsg" name="message" rows="4" maxlength="500" placeholder="随便聊聊～" required></textarea>
+          <div class="field-foot">
+            <small class="err" data-err-for="fMsg"></small>
+            <small class="count"><span id="charCount">0</span>/500</small>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" type="submit" id="submitBtn" data-magnetic>发送留言</button>
+          <span class="form-status" id="formStatus" role="status" aria-live="polite"></span>
+        </div>
+      </form>
+
+      <div class="msg-box">
+        <div class="msg-head">
+          <strong>我发出的留言 <em id="msgCount">0</em></strong>
+          <div class="msg-head-actions">
+            <button class="link-btn" id="exportMsgs" type="button">导出</button>
+            <button class="link-btn" id="clearMsgs" type="button">清空</button>
+          </div>
+        </div>
+        <ul class="msg-list" id="msgList"></ul>
+        <p class="msg-empty" id="msgEmpty">你还没留过言，写一句试试？🌸</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <p>© <span id="year"></span> fly · 想法是我的，代码是跟 AI Agent 一起磨出来的</p>
+</footer>
+
+<button class="to-top" id="toTop" type="button" aria-label="回到顶部">↑</button>
+</div><!-- /.site -->
+
+<!-- 阅读弹窗 -->
+<div class="reader" id="reader" role="dialog" aria-modal="true" aria-labelledby="readerTitle" hidden>
+  <article class="reader-panel">
+    <button class="reader-close" id="readerClose" type="button" aria-label="关闭">✕</button>
+    <header class="reader-head">
+      <div class="reader-meta">
+        <time id="readerDate"></time>
+        <span class="reader-dot">·</span>
+        <span id="readerRead"></span>
+      </div>
+      <h3 id="readerTitle"></h3>
+      <div class="reader-tags" id="readerTags"></div>
+    </header>
+    <div class="reader-body" id="readerBody"></div>
+  </article>
+</div>
+
+<!-- 轻提示 -->
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="script.js"></script>
+</body>
+</html>
