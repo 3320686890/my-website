@@ -6,7 +6,7 @@
 <meta name="color-scheme" content="light dark">
 <title>fly · 一个大一新生</title>
 <meta name="description" content="fly 的个人主页 —— 大一新生 / Python / 架子鼓 / 滑板 / 羽毛球 / 崩坏3 · 绝区零 · 卡拉彼丘">
-<link rel="icon" href="assets/fly-icon.jpg">
+<link rel="icon" href="fly-icon.jpg">
 
 <!-- 主题：首屏绘制前置入，避免白闪 -->
 <script>
@@ -25,48 +25,63 @@
 <!-- 字体自托管：不依赖任何外部域名。
      原来直接引 fonts.googleapis.com，在国内手机网络下这个请求会一直挂着，
      而它是渲染阻塞资源 —— 表现就是打开后一直白屏。
-     现在改用 assets/fonts/ 里的分片（按 unicode-range 只加载用到的部分）。 -->
-<link rel="preload" as="style" href="assets/fonts/fonts.css">
-<link rel="stylesheet" href="assets/fonts/fonts.css">
+     现在改用 同目录下的字体分片（按 unicode-range 只加载用到的部分）。 -->
+<link rel="preload" as="style" href="fonts.css">
+<link rel="stylesheet" href="fonts.css">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
 <!-- ============================================================
-     入场门：上滑打开 → 3 秒挑战 → 进入主页
+     入场门：轻触开启（赛博朋克 / 黑白 + 蓝调）
      ============================================================ -->
 <div class="gate" id="gate">
 
-  <!-- 第 1 关：上滑 -->
-  <section class="gate-scene" id="sceneSwipe" data-scene="swipe">
+  <!-- 第 1 关：轻触开启 -->
+  <section class="gate-scene" id="sceneSwipe" data-scene="tap">
     <div class="gate-bg" aria-hidden="true">
-      <span class="gate-blob gb-1"></span>
-      <span class="gate-blob gb-2"></span>
+      <span class="gate-grid"></span>
+      <span class="gate-scan"></span>
+      <span class="gate-glow gg-1"></span>
+      <span class="gate-glow gg-2"></span>
       <canvas id="gateCanvas"></canvas>
     </div>
 
-    <div class="swipe-hint">
-      <div class="swipe-track" aria-hidden="true">
-        <span class="swipe-dot" id="swipeDot">↑</span>
-      </div>
-      <p class="swipe-text">向上滑 · 打开我的小站</p>
-      <p class="swipe-sub">手机直接往上拖，电脑按住鼠标往上拖</p>
+    <!-- 装饰：旋转圆环 + 三角 -->
+    <div class="gate-shapes" aria-hidden="true">
+      <span class="gs-ring gs-ring-1"></span>
+      <span class="gs-ring gs-ring-2"></span>
+      <span class="gs-tri gs-tri-1"></span>
+      <span class="gs-tri gs-tri-2"></span>
+      <span class="gs-tri gs-tri-3"></span>
     </div>
 
-    <div class="swipe-progress" aria-hidden="true"><i id="swipeBar"></i></div>
+    <button class="tap-invite" id="tapInvite" type="button">
+      <span class="ti-frame" aria-hidden="true"></span>
+      <span class="ti-corner ti-c1" aria-hidden="true"></span>
+      <span class="ti-corner ti-c2" aria-hidden="true"></span>
+      <span class="ti-corner ti-c3" aria-hidden="true"></span>
+      <span class="ti-corner ti-c4" aria-hidden="true"></span>
+      <span class="ti-label" data-text="TAP TO ENTER">TAP TO ENTER</span>
+      <span class="ti-cn">轻触开启</span>
+      <span class="ti-sub">// 点击任意位置进入</span>
+    </button>
 
     <div class="gate-brand">
-      <img src="assets/fly-avatar.jpg" alt="" width="220" height="209">
+      <img src="fly-avatar.jpg" alt="" width="220" height="209">
       <span>fly</span>
+      <em>PERSONAL SITE</em>
     </div>
+
+    <p class="gate-foot" aria-hidden="true">NTE · 2026 · <span id="gateClock">00:00:00</span></p>
   </section>
 
   <!-- 第 2 关：3 秒挑战 -->
   <section class="gate-scene" id="sceneHold" data-scene="hold" hidden>
     <div class="gate-bg" aria-hidden="true">
-      <span class="gate-blob gb-1"></span>
-      <span class="gate-blob gb-2"></span>
       <span class="gate-grid"></span>
+      <span class="gate-glow gg-1"></span>
+      <span class="gate-glow gg-2"></span>
     </div>
 
     <div class="chal">
@@ -128,7 +143,7 @@
 <header class="nav" id="nav">
   <div class="nav-inner">
     <a class="brand" href="#top">
-      <img src="assets/fly-avatar.jpg" alt="" class="brand-avatar" width="38" height="38">
+      <img src="fly-avatar.jpg" alt="" class="brand-avatar" width="38" height="38">
       <span class="brand-name">fly</span>
     </a>
 
@@ -197,7 +212,7 @@
       <div class="hero-art anim" data-anim="scale" data-delay="2">
         <div class="art-bob">
           <div class="art-frame" data-tilt>
-            <img src="assets/fly.jpg" alt="fly 的 Q 版形象" width="560" height="531" fetchpriority="high">
+            <img src="fly.jpg" alt="fly 的 Q 版形象" width="560" height="531" fetchpriority="high">
             <span class="art-badge">本命 · 蓝发小军帽</span>
           </div>
         </div>
@@ -475,6 +490,31 @@
       </div>
 
       <p class="snake-tip">吃到金色的果子会变长，撞到自己或者墙就结束。分数越高速度越快。</p>
+
+      <div class="snake-lower">
+        <!-- 本局评语 -->
+        <div class="run-summary" id="runSummary">
+          <span class="rs-icon" aria-hidden="true">🐍</span>
+          <span class="rs-text">
+            <b id="rsTitle">还没开始</b>
+            <span id="rsDesc">玩一局看看自己能到几分，记录会留在下面。</span>
+          </span>
+        </div>
+
+        <!-- 本机排行榜 -->
+        <div class="board">
+          <div class="board-head">
+            <strong>🏆 我的最好成绩</strong>
+            <span>存在本机 · Top 5</span>
+          </div>
+          <ol class="board-list" id="boardList"></ol>
+          <p class="board-empty" id="boardEmpty">还没有记录，玩一局就上榜了。</p>
+          <div class="board-head" style="margin-top:14px;border-bottom:0;padding-bottom:0;">
+            <span id="boardTotal">共玩过 0 局</span>
+            <button class="link-btn" id="boardClear" type="button">清空记录</button>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -516,18 +556,23 @@
         <span class="contact-handle">3320686890@qq.com</span>
         <span class="contact-hint">点击复制</span>
       </button>
-      <button class="contact-card anim" data-anim="up" data-delay="3" type="button" id="pokeCard">
-        <span class="contact-icon">👉</span>
-        <strong>拍一拍我</strong>
-        <span class="contact-handle" id="pokeText">点一下试试</span>
-        <span class="contact-hint">嘿嘿</span>
-      </button>
     </div>
 
     <div class="card card-form anim" data-anim="up">
       <h3>💬 给我留言</h3>
+
+      <!-- 强调：这是真能收到的 -->
+      <div class="inbox-note">
+        <span class="inbox-icon" aria-hidden="true">📮</span>
+        <div class="inbox-text">
+          <strong>这里写的每一个字，都会直接进我的邮箱</strong>
+          <span>不是装饰，也不是存在你手机里。写完我就看得见 —— 欢迎随便聊点什么。</span>
+        </div>
+        <span class="inbox-pulse" aria-hidden="true"></span>
+      </div>
+
       <p class="form-hint">
-        写点什么吧，提交之后会直接送到我这里，我会看的。
+        留下称呼和想说的话，点发送就行。我会认真看的。
       </p>
 
       <form class="form" id="msgForm" novalidate>
@@ -565,6 +610,23 @@
       </div>
     </div>
   </section>
+
+  <!-- ==================== 08 拍一拍 ==================== -->
+  <section class="section section-poke" id="poke">
+    <div class="poke-wrap anim" data-anim="up">
+      <p class="poke-lead">来都来了，拍我一下吧</p>
+      <button class="poke-big" id="pokeCard" type="button" aria-label="拍一拍 fly">
+        <span class="poke-halo" aria-hidden="true"></span>
+        <span class="poke-ring" aria-hidden="true"></span>
+        <span class="poke-face">
+          <span class="poke-emoji" aria-hidden="true">👉</span>
+          <span class="poke-main">拍一拍我</span>
+          <span class="poke-reply" id="pokeText">点一下试试</span>
+        </span>
+      </button>
+      <p class="poke-count">已经被拍了 <b id="pokeCount">0</b> 下</p>
+    </div>
+  </section>
 </main>
 
 <footer class="footer">
@@ -590,6 +652,12 @@
     <div class="reader-body" id="readerBody"></div>
   </article>
 </div>
+
+<!-- 光标 / 触摸特效画布 -->
+<canvas class="cursor-fx" id="cursorFx" aria-hidden="true"></canvas>
+
+<!-- 音乐律动：跟着节拍起伏的小音条 -->
+<div class="beat-bars" id="beatBars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
 
 <!-- 轻提示 -->
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>

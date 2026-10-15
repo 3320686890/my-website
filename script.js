@@ -124,7 +124,8 @@
   var HOLD_TARGET = 3.0;   // 提示里的目标
   var HOLD_MIN    = 2.0;   // 通过下限
   var HOLD_MAX    = 4.0;   // 通过上限
-  var SWIPE_NEED  = 0.34;  // 上滑多少比例算打开（相对视口高度）
+  /* 入场方式已改为轻触，这个变量保留仅为兼容旧配置，不再使用 */
+  var SWIPE_NEED  = 0.34;
 
   /* ==========================================================
      以下为实现，一般不用改
@@ -169,6 +170,80 @@
     });
   }
 
+  /* 排行榜渲染：贪吃蛇模块和启动逻辑共用同一份实现 */
+  var BOARD_KEY = 'fly-snake-board';
+  var PLAYS_KEY = 'fly-snake-plays';
+
+  function boardLoad() {
+    try {
+      var v = JSON.parse(store.get(BOARD_KEY, '[]'));
+      return Array.isArray(v) ? v : [];
+    } catch (e) { return []; }
+  }
+
+  function boardWhen(ts) {
+    var d = Date.now() - ts;
+    if (d < 60000) return '刚刚';
+    if (d < 3600000) return Math.floor(d / 60000) + ' 分钟前';
+    if (d < 86400000) return Math.floor(d / 3600000) + ' 小时前';
+    if (d < 2592000000) return Math.floor(d / 86400000) + ' 天前';
+    var dt = new Date(ts);
+    return (dt.getMonth() + 1) + '月' + dt.getDate() + '日';
+  }
+
+  /* freshIdx：刚上榜那条高亮一下 */
+  function boardPaint(freshIdx) {
+    var list = $('#boardList');
+    if (!list) return;
+    var rows = boardLoad();
+    list.innerHTML = '';
+    rows.forEach(function (row, i) {
+      var li = document.createElement('li');
+      li.className = 'board-row' + (i === freshIdx ? ' fresh' : '');
+      li.innerHTML =
+        '<span class="board-rank">' + (i + 1) + '</span>' +
+        '<span class="board-score">' + row.score + ' 分</span>' +
+        '<span class="board-when">' + escapeHTML(boardWhen(row.ts)) + '</span>' +
+        '<span class="board-when">' + (row.sec ? row.sec + '秒' : '') + '</span>';
+      list.appendChild(li);
+    });
+    var empty = $('#boardEmpty');
+    if (empty) empty.style.display = rows.length ? 'none' : '';
+    var total = $('#boardTotal');
+    if (total) total.textContent = '共玩过 ' + (Number(store.get(PLAYS_KEY, '0')) || 0) + ' 局';
+    var clearBtn = $('#boardClear');
+    if (clearBtn) clearBtn.style.display = rows.length ? '' : 'none';
+  }
+
+  /* 清空按钮（只绑一次） */
+  (function bindBoardClear() {
+    var btn = $('#boardClear');
+    if (!btn || btn.__bound) return;
+    btn.__bound = true;
+    btn.addEventListener('click', function () {
+      if (!boardLoad().length) return;
+      if (!window.confirm('确定清空排行榜吗？这个操作没法撤销。')) return;
+      store.del(BOARD_KEY); store.del(PLAYS_KEY);
+      boardPaint(-1);
+      var t = $('#rsTitle'), d = $('#rsDesc'), box = $('#runSummary');
+      if (t) t.textContent = '记录已清空';
+      if (d) d.textContent = '排行榜已经重置，重新开始吧。';
+      if (box) box.classList.remove('best');
+      toast('排行榜已清空', 'ok');
+    });
+  })();
+
+  /* 数字滚动：给分数变化加一点动感 */
+  function rollNumber(el, to) {
+    if (!el) return;
+    var from = Number(el.textContent) || 0;
+    if (from === to) { el.textContent = String(to); return; }
+    el.classList.remove('tick');
+    void el.offsetWidth;
+    el.classList.add('tick');
+    el.textContent = String(to);
+  }
+
   /* 轻提示 */
   var toastTimer = null;
   function toast(msg, kind) {
@@ -205,6 +280,12 @@
     if (btn) {
       btn.addEventListener('click', function () {
         apply(root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark', true);
+        if (reduceMotion) return;
+        /* 右上角扩散一圈光，暗示切换来源 */
+        root.classList.remove('theme-flash');
+        void root.offsetWidth;
+        root.classList.add('theme-flash');
+        setTimeout(function () { root.classList.remove('theme-flash'); }, 700);
       });
     }
 
@@ -297,83 +378,53 @@
       });
     })();
 
-    /* ---------- 第 1 关：上滑 ---------- */
-    var dragging = false, startY = 0, progress = 0, passed = false;
+    /* ---------- 第 1 关：轻触开启 ----------
+       改成点击任意位置就开门。比上滑流畅得多，
+       手机上也不会再被浏览器当成滚动手势吞掉。
+       这一次点击同时也是「用户手势」，正好用来启动背景音乐。 */
+    var passed = false;
 
-    function setProgress(p) {
-      progress = Math.max(0, Math.min(1, p));
-      if (bar) bar.style.width = (progress * 100).toFixed(1) + '%';
-      var box = bar && bar.parentElement;
-      if (box) box.classList.toggle('ready', progress >= 1);
-    }
-
-    function beginSwipe(y) {
-      dragging = true; startY = y;
-      gateEl.classList.add('dragging');
-    }
-
-    function moveSwipe(y) {
-      if (!dragging) return;
-      var up = startY - y;                       // 向上为正
-      setProgress(up / (window.innerHeight * SWIPE_NEED * 1.6));
-      if (up > window.innerHeight * SWIPE_NEED) {
-        dragging = false;
-        gateEl.classList.remove('dragging');
-        setProgress(1);
-        reveal();
+    /* 门上的小时钟（纯装饰，让赛博感更足） */
+    (function gateClock() {
+      var el = $('#gateClock');
+      if (!el) return;
+      function tick() {
+        var d = new Date();
+        el.textContent = [d.getHours(), d.getMinutes(), d.getSeconds()]
+          .map(function (n) { return String(n).padStart(2, '0'); }).join(':');
       }
-    }
+      tick();
+      setInterval(tick, 1000);
+    })();
 
-    function endSwipe() {
-      if (!dragging) return;
-      dragging = false;
-      gateEl.classList.remove('dragging');
-      /* 没滑够就弹回去 */
-      if (progress < 1) {
-        setProgress(0);
-        if (progress > 0.25) toast('再往上滑一点点～', 'bad');
-      }
-    }
-
-    sceneSwipe.addEventListener('pointerdown', function (e) {
-      if (e.target.closest('a, button')) return;
-      sceneSwipe.setPointerCapture && sceneSwipe.setPointerCapture(e.pointerId);
-      beginSwipe(e.clientY);
-    });
-    sceneSwipe.addEventListener('pointermove', function (e) { moveSwipe(e.clientY); });
-    sceneSwipe.addEventListener('pointerup', endSwipe);
-    sceneSwipe.addEventListener('pointercancel', endSwipe);
-
-    /* 触屏：阻止页面跟着滚 */
-    sceneSwipe.addEventListener('touchmove', function (e) {
-      if (dragging) e.preventDefault();
-    }, { passive: false });
-
-    /* 滚轮也算上滑 */
-    sceneSwipe.addEventListener('wheel', function (e) {
-      if (e.deltaY >= 0) return;
-      setProgress(progress + 0.12);
-      if (progress >= 1) reveal();
-    }, { passive: true });
-
-    /* 键盘：方向上 / 空格 也能过 */
-    function onSwipeKey(e) {
-      if (sceneSwipe.hidden) return;
-      if (e.key === 'ArrowUp') { setProgress(progress + 0.25); if (progress >= 1) reveal(); }
-      if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); setProgress(1); reveal(); }
-    }
-
-    function reveal() {
+    function reveal(e) {
       if (passed) return;
       passed = true;
-      document.removeEventListener('keydown', onSwipeKey);
+
+      /* 顺手把这个手势交给音乐 —— 浏览器只允许在用户操作里播放声音。
+         这是「进门就自动放歌」唯一可行的时机。 */
+      if (typeof window.__startMusic === 'function') window.__startMusic();
+
       sceneSwipe.hidden = true;
       sceneHold.hidden = false;
       initHold();
     }
 
-    document.addEventListener('keydown', onSwipeKey);
-    if (reduceMotion) { /* 仍然保留上滑，只是动画更快 */ }
+    /* 点击任意位置都能进；但排除掉门里真正的链接 */
+    sceneSwipe.addEventListener('click', function (e) {
+      if (e.target.closest('a[href]')) return;
+      reveal(e);
+    });
+
+    /* 键盘：回车 / 空格 / 方向上 都能进 */
+    function onGateKey(e) {
+      if (sceneSwipe.hidden) return;
+      if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        reveal();
+      }
+    }
+    document.addEventListener('keydown', onGateKey);
 
     /* ---------- 第 2 关：按住 3 秒 ---------- */
     var holdInit = false;
@@ -395,7 +446,7 @@
       ring.style.strokeDasharray = CIRC.toFixed(2);
       ring.style.strokeDashoffset = CIRC.toFixed(2);
 
-      var holding = false, t0 = 0, raf = null, finalT = 0;
+      var holding = false, t0 = 0, ticker = null, finalT = 0, lastShown = -1;
 
       function paint(t) {
         num.textContent = t.toFixed(2);
@@ -412,15 +463,33 @@
         }
       }
 
-      function loop() {
+      /* 用 setInterval 而不是 requestAnimationFrame：
+         手机在滚动、切后台或省电模式下会节流 RAF，读数会卡住不动。
+         60Hz 的间隔对 0.01 秒的读数完全够用，而且稳定得多。 */
+      function tick() {
         if (!holding) return;
-        paint((performance.now() - t0) / 1000);
-        raf = requestAnimationFrame(loop);
+        try {
+          var now = (performance.now() - t0) / 1000;
+          /* 读数没变就不重绘，省点开销 */
+          if (now.toFixed(2) !== lastShown) {
+            lastShown = now.toFixed(2);
+            paint(now);
+          }
+        } catch (err) {
+          /* 绘制出任何意外都不该让计时卡死，直接把这次跳过 */
+        }
       }
 
+      var activeId = null;
+
       function down(e) {
-        if (e && e.button !== undefined && e.button !== 0) return;
+        /* 按下期间忽略其他指针（多指乱按不会互相干扰） */
         if (holding) return;
+        /* 只有鼠标才需要判断左右键：触摸和触控笔没有「左键」这个概念，
+           button 常常是 -1 或 0，用原来的判断会把手机构型误拦掉。 */
+        var ptype = (e && e.pointerType) || (isTouchPointer ? 'touch' : 'mouse');
+        if (ptype === 'mouse' && e && typeof e.button === 'number' && e.button > 0) return;
+        if (e && e.pointerId !== undefined) activeId = e.pointerId;
         holding = true;
         t0 = performance.now();
         btn.classList.add('holding');
@@ -436,14 +505,23 @@
           foot.classList.add('show');
         }
         if (label) label.textContent = '松手';
+        lastShown = '0.00';
         paint(0);
-        raf = requestAnimationFrame(loop);
+        clearInterval(ticker);
+        ticker = setInterval(tick, 16);
       }
 
-      function up() {
+      function up(e) {
         if (!holding) return;
+        /* 只在「明确是另一个指针」时才忽略。实测浏览器给触摸分配的
+           pointerId 有时和 pointerdown 不一致，卡太死会导致松手无响应。 */
+        if (e && e.pointerId !== undefined && activeId !== null &&
+            e.pointerId !== activeId && e.pointerType !== 'touch' && e.pointerType !== 'pen') {
+          return;
+        }
+        activeId = null;
         holding = false;
-        if (raf) { cancelAnimationFrame(raf); raf = null; }
+        clearInterval(ticker); ticker = null;
         btn.classList.remove('holding');
         if (label) label.textContent = '按住';
         var footEl = $('#chalFoot');
@@ -485,11 +563,46 @@
         }, reduceMotion ? 300 : 900);
       }
 
-      btn.addEventListener('pointerdown', down);
+      /* 注意：这里刻意不在触摸时监听 pointerleave。
+         真机上手指轻微移动、或指腹超出按钮边缘，浏览器就会派发 pointerleave，
+         导致计时被中断、读数卡死在某个值（手机上表现为「卡住不动」）。
+         鼠标才需要 pointerleave —— 指针移出去应当算松手。 */
+      var isTouchPointer = false;
+
+      btn.addEventListener('pointerdown', function (e) {
+        isTouchPointer = (e.pointerType === 'touch' || e.pointerType === 'pen');
+        down(e);
+      });
+      /* 结束计时只认 pointerup / pointercancel。
+         实测：真机触摸时 pointerleave 会触发多次，且 pointerId 与按下时不同，
+         会绕过校验提前把计时清掉并归零 —— 表现就是读数卡住、松手没反应。
+         所以触摸路径完全不使用 pointerleave。 */
       btn.addEventListener('pointerup', up);
       btn.addEventListener('pointercancel', up);
-      btn.addEventListener('pointerleave', up);
-      window.addEventListener('blur', up);
+
+      /* 鼠标移出按钮视为松手（只在确实是鼠标时生效） */
+      btn.addEventListener('pointerleave', function (e) {
+        if (e.pointerType === 'touch' || e.pointerType === 'pen') return;
+        if (isTouchPointer) return;
+        up(e);
+      });
+
+      window.addEventListener('blur', function () { up(); });
+
+      /* 兜底：老浏览器不支持 Pointer Events 时用原生 touch 事件 */
+      if (!window.PointerEvent) {
+        btn.addEventListener('touchstart', function (e) { e.preventDefault(); down(); }, { passive: false });
+        btn.addEventListener('touchend', function (e) { e.preventDefault(); up(); }, { passive: false });
+        btn.addEventListener('touchcancel', function () { up(); });
+      }
+
+      /* 手指（或鼠标）在按钮外松开也要能正确结束，
+         否则会一直停在 holding 状态出不来 */
+      window.addEventListener('pointerup', function (e) { if (holding) up(e); });
+      window.addEventListener('pointercancel', function (e) { if (holding) up(e); });
+      document.addEventListener('visibilitychange', function () {
+        if (document.hidden && holding) up();
+      });
 
       /* 键盘也能玩 */
       btn.addEventListener('keydown', function (e) {
@@ -634,10 +747,11 @@
       var y = window.scrollY || root.scrollTop;
       if (nav) nav.classList.toggle('scrolled', y > 12);
       if (top) top.classList.toggle('show', y > 640);
-      if (bar) {
-        var max = root.scrollHeight - window.innerHeight;
-        bar.style.width = ((max > 0 ? Math.min(1, Math.max(0, y / max)) : 0) * 100).toFixed(2) + '%';
-      }
+      var max = root.scrollHeight - window.innerHeight;
+      var pct = max > 0 ? Math.min(1, Math.max(0, y / max)) : 0;
+      if (bar) bar.style.width = (pct * 100).toFixed(2) + '%';
+      /* 「回到顶部」按钮外圈同步画一圈进度 */
+      if (top) top.style.setProperty('--top-progress', (pct * 100).toFixed(1));
     }, 16);
 
     window.addEventListener('scroll', onScroll, { passive: true });
@@ -705,35 +819,249 @@
     setTimeout(pass, 2500);
   })();
 
-  /* ---------------- 6.5 鼠标跟随柔光光晕 ---------------- */
-  (function cursorGlow() {
-    if (!canHover || reduceMotion) return;
+  /* ---------------- 6.2 滚动视差 ----------------
+     背景光斑、首屏装饰、板块编号以不同速度位移，产生纵深感。
+     只写 CSS 变量，位移交给 transform，走合成线程不占主线程。 */
+  (function parallax() {
+    if (reduceMotion) return;
 
-    var el = document.createElement('div');
-    el.className = 'cursor-glow';
-    document.body.appendChild(el);
+    var bg = document.querySelector('.bg-deco');
+    var art = document.querySelector('.hero-art');
+    var nums = $$('.section-title span');
+    var ticking = false;
 
-    var tx = 0, ty = 0, cx = 0, cy = 0, on = false, raf = null;
+    function apply() {
+      ticking = false;
+      var y = window.scrollY || root.scrollTop;
 
-    window.addEventListener('mousemove', function (e) {
-      tx = e.clientX; ty = e.clientY;
-      if (!on) {
-        on = true; cx = tx; cy = ty;
-        el.classList.add('on');
-        if (!raf) raf = requestAnimationFrame(loop);
+      if (bg) bg.style.setProperty('--par', (-y * 0.1).toFixed(1) + 'px');
+      if (art) art.style.setProperty('--par-art', (y * 0.06).toFixed(1) + 'px');
+
+      /* 编号：各自按自身位置反向偏移一点 */
+      nums.forEach(function (n) {
+        var r = n.getBoundingClientRect();
+        if (r.bottom < -80 || r.top > window.innerHeight + 80) return;
+        var mid = r.top + r.height / 2 - window.innerHeight / 2;
+        n.style.setProperty('--par-num', (mid * -0.045).toFixed(1) + 'px');
+      });
+    }
+
+    function onScroll() {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(apply);
+    }
+
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll);
+    apply();
+  })();
+
+  /* ---------------- 6.3 区块分隔线（滚动到才亮起） ---------------- */
+  (function sectionSeen() {
+    var secs = $$('main .section');
+    if (!secs.length || !('IntersectionObserver' in window)) return;
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (en.isIntersecting) en.target.classList.add('seen');
+      });
+    }, { rootMargin: '-10% 0px -30% 0px', threshold: 0 });
+    secs.forEach(function (s) { io.observe(s); });
+  })();
+
+  /* ---------------- 6.5 光标 / 触摸特效 ----------------
+     桌面：一圈柔和光晕 + 拖尾的圆环和三角，跟着指针走。
+     手机：没有指针，改成手指点哪儿就炸开一圈圆环和三角。
+     用 canvas 画，元素数量再多也不掉帧。 */
+  (function cursorFX() {
+    var cv = $('#cursorFx');
+    if (!cv || reduceMotion) return;
+    var ctx = cv.getContext('2d');
+    if (!ctx) return;
+
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var W = 0, H = 0;
+    var ring, glow = { x: -999, y: -999, a: 0 };
+    var trailRings = [];   // 拖尾圆环
+    var shapes = [];       // 漂浮三角
+    var bursts = [];       // 触摸爆发
+    var t = 0;
+    var COLL = ['169,156,240', '255,168,197', '158,201,245', '255,207,122'];
+
+    function resize() {
+      W = window.innerWidth; H = window.innerHeight;
+      cv.width = Math.round(W * dpr);
+      cv.height = Math.round(H * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    function spawnTrail(x, y) {
+      if (trailRings.length > 14) return;
+      trailRings.push({
+        x: x, y: y, r: 10 + Math.random() * 10,
+        life: 1, max: 1,
+        vx: (Math.random() - .5) * .5,
+        vy: (Math.random() - .5) * .5,
+        rot: Math.random() * Math.PI,
+        col: COLL[(Math.random() * COLL.length) | 0]
+      });
+    }
+
+    function spawnShape(x, y) {
+      if (shapes.length > 10) return;
+      shapes.push({
+        x: x, y: y,
+        size: 5 + Math.random() * 6,
+        rot: Math.random() * Math.PI * 2,
+        spin: (Math.random() - .5) * .05,
+        vy: -.25 - Math.random() * .5,
+        life: 1,
+        col: COLL[(Math.random() * COLL.length) | 0]
+      });
+    }
+
+    /* 触摸/点击爆发：一圈扩散的环 + 若干三角 */
+    function burst(x, y) {
+      bursts.push({ x: x, y: y, r: 6, life: 1, col: '127,212,255' });
+      var N = 9;
+      for (var i = 0; i < N; i++) {
+        var a = (Math.PI * 2 / N) * i + Math.random() * .3;
+        /* 速度要够大、衰减要够慢，三角才能真正散开，
+           否则全挤在中心一小团，看着像一坨。 */
+        var sp = 5.2 + Math.random() * 3.4;
+        shapes.push({
+          x: x, y: y,
+          size: 6 + Math.random() * 5,
+          rot: a,
+          spin: (Math.random() - .5) * .22,
+          vx: Math.cos(a) * sp,
+          vy: Math.sin(a) * sp,
+          burst: true,          // 标记为爆发型：衰减慢、生命长
+          life: 1,
+          col: i % 2 ? '127,212,255' : '169,156,240'
+        });
       }
-    }, { passive: true });
+    }
 
-    window.addEventListener('mouseleave', function () {
-      on = false; el.classList.remove('on');
-    });
+    function drawTri(x, y, s, rot, alpha, col) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(rot);
+      ctx.beginPath();
+      ctx.moveTo(0, -s);
+      ctx.lineTo(s * .87, s * .5);
+      ctx.lineTo(-s * .87, s * .5);
+      ctx.closePath();
+      ctx.strokeStyle = 'rgba(' + col + ',' + alpha + ')';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+      ctx.restore();
+    }
 
-    function loop() {
-      /* 缓动跟随，形成柔和的拖尾 */
-      cx += (tx - cx) * 0.12;
-      cy += (ty - cy) * 0.12;
-      el.style.transform = 'translate3d(' + (cx - 160).toFixed(1) + 'px,' + (cy - 160).toFixed(1) + 'px,0)';
-      raf = on ? requestAnimationFrame(loop) : null;
+    function frame() {
+      t++;
+      ctx.clearRect(0, 0, W, H);
+
+      /* 1. 柔和光晕（跟着指针） */
+      if (glow.a > 0.01) {
+        var g = ctx.createRadialGradient(glow.x, glow.y, 0, glow.x, glow.y, 170);
+        var dark = root.getAttribute('data-theme') === 'dark';
+        g.addColorStop(0, 'rgba(169,156,240,' + (0.2 * glow.a * (dark ? 1.25 : 1)) + ')');
+        g.addColorStop(0.55, 'rgba(158,201,245,' + (0.07 * glow.a) + ')');
+        g.addColorStop(1, 'rgba(169,156,240,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(glow.x, glow.y, 170, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      /* 2. 拖尾圆环 */
+      for (var i = trailRings.length - 1; i >= 0; i--) {
+        var r = trailRings[i];
+        r.x += r.vx; r.y += r.vy;
+        r.life -= 0.028;
+        if (r.life <= 0) { trailRings.splice(i, 1); continue; }
+        var a = r.life * 0.5;
+        ctx.beginPath();
+        ctx.arc(r.x, r.y, r.r * (1.7 - r.life * 0.7), 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(' + r.col + ',' + a.toFixed(3) + ')';
+        ctx.lineWidth = 1.3;
+        ctx.stroke();
+        /* 环上挂一个小三角，转着走 */
+        drawTri(r.x + Math.cos(r.rot) * r.r, r.y + Math.sin(r.rot) * r.r,
+                r.r * 0.32, r.rot + Math.PI / 2, a * 1.2, r.col);
+      }
+
+      /* 3. 漂浮三角 */
+      for (var k = shapes.length - 1; k >= 0; k--) {
+        var s = shapes[k];
+        if (s.burst) {
+          /* 爆发型：方向不变、速度几乎不衰减，飞得出去 */
+          s.x += s.vx; s.y += s.vy;
+          s.vx *= 0.985; s.vy *= 0.985;
+          s.life -= 0.019;
+        } else if (s.vx !== undefined) {
+          s.x += s.vx; s.y += s.vy; s.vx *= 0.96; s.vy *= 0.96;
+          s.life -= 0.022;
+        } else {
+          s.y += s.vy;
+          s.life -= 0.02;
+        }
+        s.rot += s.spin;
+        if (s.life <= 0) { shapes.splice(k, 1); continue; }
+        drawTri(s.x, s.y, s.size, s.rot, s.life * 0.75, s.col);
+      }
+
+      /* 4. 触摸爆发的扩散环 */
+      for (var m = bursts.length - 1; m >= 0; m--) {
+        var b = bursts[m];
+        b.r += 8.5;
+        b.life -= 0.028;
+        if (b.life <= 0) { bursts.splice(m, 1); continue; }
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(' + b.col + ',' + (b.life * 0.7).toFixed(3) + ')';
+        ctx.lineWidth = 2 * b.life;
+        ctx.stroke();
+        /* 内圈虚线，更像 HUD */
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.r * 0.68, 0, Math.PI * 2);
+        ctx.setLineDash([4, 6]);
+        ctx.strokeStyle = 'rgba(' + b.col + ',' + (b.life * 0.4).toFixed(3) + ')';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      requestAnimationFrame(frame);
+    }
+
+    resize();
+    requestAnimationFrame(frame);
+    window.addEventListener('resize', throttle(resize, 240));
+
+    if (canHover) {
+      /* 桌面：指针跟随 + 拖尾 */
+      var lastTrail = 0;
+      window.addEventListener('mousemove', function (e) {
+        glow.x = e.clientX; glow.y = e.clientY; glow.a = 1;
+        var now = Date.now();
+        if (now - lastTrail > 55) {
+          lastTrail = now;
+          spawnTrail(e.clientX, e.clientY);
+          if (Math.random() < 0.45) spawnShape(e.clientX, e.clientY);
+        }
+      }, { passive: true });
+      window.addEventListener('mouseleave', function () { glow.a = 0; });
+      window.addEventListener('mousedown', function (e) { burst(e.clientX, e.clientY); });
+    } else {
+      /* 触摸设备：点哪儿炸开一圈 */
+      window.addEventListener('touchstart', function (e) {
+        var tp = e.touches[0];
+        if (tp) burst(tp.clientX, tp.clientY);
+      }, { passive: true });
+      /* 鼠标设备偶尔也会用触摸板，一并支持点击 */
+      window.addEventListener('click', function (e) { burst(e.clientX, e.clientY); });
     }
   })();
 
@@ -1227,20 +1555,37 @@
 
   /* ---------------- 10. 联系方式：点击复制 / 拍一拍 ---------------- */
   (function contacts() {
+    /* 老办法：选中一个临时输入框再 execCommand('copy')。
+       现代浏览器虽然不推荐，但在缺用户激活、或权限策略受限时仍然管用。 */
+    function legacyCopy(text) {
+      var ok = false;
+      try {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.cssText = 'position:fixed;top:0;left:-9999px;opacity:0;';
+        document.body.appendChild(ta);
+        ta.select();
+        ta.setSelectionRange(0, ta.value.length);
+        ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch (e) { ok = false; }
+      return ok;
+    }
+
+    /* 三段式：现代 API -> 老办法 -> 弹框让用户自己复制。
+       注意不能只在「API 不存在」时兜底 —— 它常常是「存在但拒绝」，
+       那样会直接抛错，永远走不到老办法。 */
     function copyText(text) {
       if (navigator.clipboard && navigator.clipboard.writeText) {
-        return navigator.clipboard.writeText(text);
+        return navigator.clipboard.writeText(text).catch(function () {
+          if (legacyCopy(text)) return;
+          throw new Error('clipboard-unavailable');
+        });
       }
       return new Promise(function (resolve, reject) {
-        try {
-          var ta = document.createElement('textarea');
-          ta.value = text;
-          ta.style.cssText = 'position:fixed;left:-9999px;';
-          document.body.appendChild(ta); ta.select();
-          document.execCommand('copy');
-          document.body.removeChild(ta);
-          resolve();
-        } catch (e) { reject(e); }
+        if (legacyCopy(text)) resolve();
+        else reject(new Error('clipboard-unavailable'));
       });
     }
 
@@ -1258,16 +1603,18 @@
             if (hint) hint.textContent = original;
           }, 1800);
         }).catch(function () {
-          toast('复制失败，手动记一下吧：' + value, 'bad');
+          /* 实在复制不了就弹出来让用户自己选中，别让人干瞪眼 */
+          try { window.prompt('浏览器不让自动复制，手动复制一下吧：', value); } catch (e) {}
+          toast('已弹出，手动复制即可', 'bad');
         });
       });
     });
 
-    /* 拍一拍 */
-    var poke = $('#pokeCard'), pokeText = $('#pokeText');
+    /* 拍一拍（页面最底下那个大按钮） */
+    var poke = $('#pokeCard'), pokeText = $('#pokeText'), pokeCount = $('#pokeCount');
     if (poke && pokeText) {
       var replies = [
-        '唉嘿嘿，被拍到啦 ✨',
+        '被拍到啦 ✨',
         '在的在的，怎么啦？',
         '今天也要开心一点哦 🌸',
         '正在写代码，勿扰（骗你的）',
@@ -1275,17 +1622,33 @@
         '一起打游戏吗？🎮',
         '已经拍了好多下了，但我不会生气的～',
         '鼓棒掉了，等我捡一下 🥁',
-        '滑板又摔了，但是没事 🛹'
+        '滑板又摔了，但是没事 🛹',
+        '唉嘿嘿，谢谢你陪我玩这么久'
       ];
       var n = 0;
+      /* 拍的总数存本地，来一次算一次 */
+      var KEY = 'fly-poke-count';
+      var total = Number(store.get(KEY, '0')) || 0;
+      if (pokeCount) pokeCount.textContent = String(total);
+
       poke.addEventListener('click', function () {
         pokeText.textContent = replies[n % replies.length];
+        n++;
+        total++;
+        store.set(KEY, String(total));
+        if (pokeCount) pokeCount.textContent = String(total);
+
+        /* 重放两个动画 */
         pokeText.style.animation = 'none';
         void pokeText.offsetWidth;
         pokeText.style.animation = '';
-        pokeText.classList.add('poke-flash');
-        setTimeout(function () { pokeText.classList.remove('poke-flash'); }, 500);
-        n++;
+        poke.classList.remove('poked');
+        void poke.offsetWidth;
+        poke.classList.add('poked');
+        setTimeout(function () { poke.classList.remove('poked'); }, 620);
+
+        /* 每 10 下给个额外反馈 */
+        if (total % 10 === 0) toast('你已经拍了我 ' + total + ' 下，厉害 👏', 'ok');
       });
     }
   })();
@@ -1305,7 +1668,57 @@
     var CELL = cv.width / COLS;                 // 30
     var BEST_KEY = 'fly-snake-best';
 
+    var rsBox = $('#runSummary'), rsTitle = $('#rsTitle'), rsDesc = $('#rsDesc');
+
+    /* 排行榜的读写与渲染用共享实现（见文件上方的 boardPaint） */
+    function loadBoard() { return boardLoad(); }
+    function renderBoard(freshIdx) { boardPaint(freshIdx); }
+
+    /* 记一局：返回它在榜上的名次（-1 表示没上榜） */
+    function recordRun(finalScore, seconds) {
+      var list = boardLoad();
+      var entry = { score: finalScore, ts: Date.now(), sec: Math.round(seconds) };
+      list.push(entry);
+      list.sort(function (a, b) { return b.score - a.score || a.ts - b.ts; });
+      var top = list.slice(0, 5);
+      store.set(BOARD_KEY, JSON.stringify(top));
+      store.set(PLAYS_KEY, String((Number(store.get(PLAYS_KEY, '0')) || 0) + 1));
+      var idx = top.indexOf(entry);
+      boardPaint(idx);
+      return idx;
+    }
+
+    /* 本局评语 */
+    function describe(finalScore, idx, seconds) {
+      if (!rsBox) return;
+      rsBox.classList.toggle('best', idx === 0);
+      var titles = ['🐍 还没开始', '🌱 刚起步', '🙂 有点样子了', '😎 稳住了', '🔥 手感来了', '👑 本页最强'];
+      var t = finalScore === 0 ? 0
+            : finalScore < 3 ? 1
+            : finalScore < 7 ? 2
+            : finalScore < 13 ? 3
+            : finalScore < 20 ? 4 : 5;
+      if (rsTitle) rsTitle.textContent = titles[t];
+      var desc;
+      if (finalScore === 0) {
+        desc = '一个果子都没吃到，再来一局吧。';
+      } else if (idx === 0) {
+        desc = '本局 ' + finalScore + ' 分、坚持了 ' + Math.round(seconds) + ' 秒 —— 这是你的最好成绩！';
+      } else if (idx > 0) {
+        desc = '本局 ' + finalScore + ' 分，排在榜上第 ' + (idx + 1) + ' 名，' +
+               (Math.round(seconds)) + ' 秒。';
+      } else {
+        var list = loadBoard();
+        var topScore = list.length ? list[0].score : finalScore;
+        desc = '本局 ' + finalScore + ' 分，离最好成绩还差 ' + (topScore - finalScore) + ' 分。';
+      }
+      if (rsDesc) rsDesc.textContent = desc;
+    }
+
+
+
     var snake, dir, nextDir, food, score, alive, paused, timer, tickMs, best;
+    var runStart = performance.now();
 
     best = Number(store.get(BEST_KEY, '0')) || 0;
     if (bestEl) bestEl.textContent = String(best);
@@ -1331,9 +1744,9 @@
     }
 
     function updateHud() {
-      if (scoreEl) scoreEl.textContent = String(score);
+      rollNumber(scoreEl, score);
       if (levelEl) levelEl.textContent = String(Math.min(9, 1 + Math.floor(score / 5)));
-      if (bestEl) bestEl.textContent = String(best);
+      rollNumber(bestEl, best);
     }
 
     /* --- 绘制 --- */
@@ -1448,21 +1861,28 @@
     function gameOver() {
       alive = false;
       clearInterval(timer); timer = null;
+      var seconds = (performance.now() - runStart) / 1000;
       draw();
       if (bigEl) bigEl.textContent = '游戏结束 · 得分 ' + score;
+      var idx = recordRun(score, seconds);
       if (smallEl) {
-        smallEl.textContent = score >= best && score > 0
+        smallEl.textContent = idx === 0 && score > 0
           ? '新纪录！你就是本页最强的蛇 🐍'
           : (score === 0 ? '一个都没吃到，要不…再来一次？' : '最高纪录还是 ' + best + ' 分，再冲一把');
       }
+      describe(score, idx, seconds);
       if (startBtn) startBtn.textContent = '再来一局';
       if (overlay) overlay.classList.remove('hide');
     }
 
     function start() {
       reset();
+      runStart = performance.now();
       if (overlay) overlay.classList.add('hide');
       if (pauseBtn) pauseBtn.textContent = '暂停';
+      if (rsTitle) rsTitle.textContent = '正在玩…';
+      if (rsDesc) rsDesc.textContent = '方向键 / WASD 控制，手机可以滑动屏幕。';
+      if (rsBox) rsBox.classList.remove('best');
       restartTimer();
       draw();
     }
@@ -1555,8 +1975,102 @@
     draw();
   })();
 
+  /* ---------------- 11.4 音乐律动引擎 ----------------
+     把声音接到 AnalyserNode，逐帧算能量，写进 --beat（0~1），
+     由 CSS 驱动光晕、强调色、音条的呼吸。
+     拿不到真实频谱时（跨域音频等）退回正弦模拟，效果不丢。 */
+  var Beat = (function () {
+    var analyser = null, data = null, raf = null, source = null;
+    var beating = false, simT = 0;
+    var bars = null;
+
+    function barsEl() {
+      if (!bars) bars = document.getElementById('beatBars');
+      return bars;
+    }
+
+    function setBeat(v) {
+      root.style.setProperty('--beat', v.toFixed(3));
+      var b = barsEl();
+      if (b) {
+        var kids = b.children;
+        for (var i = 0; i < kids.length; i++) {
+          /* 每根条错开一点相位，看起来更像真的 */
+          var ph = i * 0.7;
+          var h = 6 + Math.max(0, Math.sin(simT * 3 + ph)) * 20 * (0.4 + v);
+          kids[i].style.height = h.toFixed(1) + 'px';
+        }
+      }
+    }
+
+    function loop() {
+      if (!beating) return;
+      simT += 0.05;
+      var v = 0;
+
+      if (analyser && data) {
+        analyser.getByteFrequencyData(data);
+        var sum = 0;
+        /* 只取低频段（鼓点主要在这里），响应更跟手 */
+        var n = Math.min(24, data.length);
+        for (var i = 0; i < n; i++) sum += data[i];
+        v = (sum / n) / 255;
+        /* 低音偏多，压缩一下动态范围 */
+        v = Math.min(1, Math.pow(v, 0.75) * 1.5);
+      } else {
+        /* 模拟：两拍一循环，带一点强弱变化 */
+        v = 0.22 + 0.5 * Math.pow(Math.max(0, Math.sin(simT * 2.2)), 3);
+      }
+
+      setBeat(v);
+      raf = requestAnimationFrame(loop);
+    }
+
+    return {
+      /* 用真实音频节点：synth 传 master，file 传 audio 元素 */
+      attachNode: function (node, ctx) {
+        try {
+          analyser = ctx.createAnalyser();
+          analyser.fftSize = 128;
+          analyser.smoothingTimeConstant = 0.72;
+          data = new Uint8Array(analyser.frequencyBinCount);
+          node.connect(analyser);
+          return true;
+        } catch (e) { analyser = null; data = null; return false; }
+      },
+      attachElement: function (el, ctx) {
+        try {
+          source = ctx.createMediaElementSource(el);
+          analyser = ctx.createAnalyser();
+          analyser.fftSize = 128;
+          analyser.smoothingTimeConstant = 0.72;
+          data = new Uint8Array(analyser.frequencyBinCount);
+          source.connect(analyser);
+          analyser.connect(ctx.destination);
+          return true;
+        } catch (e) { analyser = null; data = null; return false; }
+      },
+      start: function () {
+        if (beating) return;
+        beating = true;
+        document.body.classList.add('music-live');
+        raf = requestAnimationFrame(loop);
+      },
+      stop: function () {
+        beating = false;
+        if (raf) { cancelAnimationFrame(raf); raf = null; }
+        document.body.classList.remove('music-live');
+        root.style.setProperty('--beat', '0');
+        var b = barsEl();
+        if (b) {
+          for (var i = 0; i < b.children.length; i++) b.children[i].style.height = '';
+        }
+      }
+    };
+  })();
+
   /* ---------------- 11.5 耳机 = 音乐播放器 ----------------
-     优先播放 assets/bgm.mp3（你自己放一个进去就能用）；
+     优先播放同目录下的 bgm.mp3（有文件就播文件，没有才用合成音）；
      没有文件时用 Web Audio 现场合成一段原创轻音乐，不依赖网络也不涉及版权。 */
   (function music() {
     var btn = $('#musicBtn');
@@ -1565,6 +2079,7 @@
     var playing = false;
     var ac = null, master = null, timer = null, step = 0, nextTime = 0;
     var usingFile = false, audioEl = null;
+    var started = false;      // 是否已经开始过（避免重复触发）
 
     function setUI(on) {
       playing = on;
@@ -1589,7 +2104,7 @@
         done(false);
       });
       setTimeout(function () { if (!settled) { settled = true; done(false); } }, 1600);
-      a.src = 'assets/bgm.mp3';
+      a.src = 'bgm.mp3';
       a.load();
     }
 
@@ -1606,6 +2121,9 @@
       master.gain.value = 0.0001;
       master.connect(ac.destination);
       master.gain.exponentialRampToValueAtTime(0.16, ac.currentTime + 1.2);
+      /* 把合成音接到律动分析器 */
+      Beat.attachNode(master, ac);
+      Beat.start();
       nextTime = ac.currentTime + 0.1;
       step = 0;
 
@@ -1677,19 +2195,80 @@
       ac = null; master = null;
     }
 
+    /* ---------- 真正开始播放 ----------
+       抽出来是为了让入场门复用：点「开启」那一下就是用户手势，
+       浏览器只允许在这种时机启动声音，所以「进门自动放歌」只能挂在那里。 */
+    /* 给音频文件建一个 Web Audio 链路，用来做律动。
+       注意：一旦接入 MediaElementSource，就必须再由我们连回 destination，
+       否则就没声音了。失败时退回模拟节拍，不影响播放。 */
+    var fileCtx = null;
+    function hookFile(el) {
+      if (fileCtx) return;
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) { Beat.start(); return; }
+      try {
+        fileCtx = new AC();
+        if (Beat.attachElement(el, fileCtx)) Beat.start();
+        else Beat.start();
+      } catch (e) {
+        fileCtx = null;
+        Beat.start();
+      }
+    }
+
+    function startPlaying() {
+      if (playing || started) return;
+      started = true;
+
+      if (usingFile) {
+        if (audioEl) {
+          hookFile(audioEl);
+          audioEl.play().then(function () { setUI(true); })
+            .catch(function () { started = false; });
+        }
+        return;
+      }
+
+      /* 先看有没有音频文件；没有就退回现场合成 */
+      tryFile(function (ok) {
+        if (ok) {
+          usingFile = true;
+          audioEl.volume = 0.45;
+          hookFile(audioEl);
+          audioEl.play().then(function () {
+            setUI(true);
+            toast('🎵 Moon Halo · 正在播放', 'ok');
+          }).catch(function () {
+            started = false;
+            Beat.stop();
+            toast('音乐被浏览器拦下了，点右下角耳机试试', 'bad');
+          });
+        } else {
+          if (synthStart()) { setUI(true); toast('给你放了段轻音乐 🎵', 'ok'); }
+          else { started = false; }
+        }
+      });
+    }
+
+    /* 供入场门调用 */
+    window.__startMusic = startPlaying;
+
     /* ---------- 开关 ---------- */
     btn.addEventListener('click', function () {
       if (playing) {
         if (usingFile && audioEl) audioEl.pause();
         else synthStop();
+        Beat.stop();
         setUI(false);
         toast('音乐已暂停 🎧');
         return;
       }
       if (usingFile) {
         if (audioEl) {
-          audioEl.play().then(function () { setUI(true); toast('正在播放 🎵', 'ok'); })
-            .catch(function () { toast('播放被浏览器拦下了，再点一次试试', 'bad'); });
+          hookFile(audioEl);
+          audioEl.play().then(function () {
+            setUI(true); Beat.start(); toast('正在播放 🎵', 'ok');
+          }).catch(function () { toast('播放被浏览器拦下了，再点一次试试', 'bad'); });
         }
         return;
       }
@@ -1710,9 +2289,13 @@
       if (!document.hidden || !playing) return;
       if (usingFile && audioEl) audioEl.pause();
       else synthStop();
+      Beat.stop();
       setUI(false);
     });
   })();
+
+  /* ---------------- 11.9 排行榜首次渲染 ---------------- */
+  boardPaint(-1);
 
   /* ---------------- 12. 其他 ---------------- */
   (function misc() {
