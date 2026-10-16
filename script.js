@@ -122,8 +122,7 @@
      配置区 4：3 秒挑战的时间窗口（秒）
      ========================================================== */
   var HOLD_TARGET = 3.0;   // 提示里的目标
-  var HOLD_MIN    = 2.0;   // 通过下限
-  var HOLD_MAX    = 4.0;   // 通过上限
+  /* 进门后的「按住 3 秒」验证已移除：进门即达主页。 */
   /* 入场方式已改为轻触，这个变量保留仅为兼容旧配置，不再使用 */
   var SWIPE_NEED  = 0.34;
 
@@ -168,6 +167,25 @@
     return String(s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
+  }
+
+  /* 画质档位 —— 在 <head> 里已经同步算好，这里直接用 */
+  var PERF = window.__PERF || { mobile: false, low: false, touch: false };
+  /* 移动端设备像素比上限压到 1.5：
+     3x 屏上 (3/1.5)^2 = 4 倍像素量差距，canvas 填充率是手机上的大头。 */
+  var DPR_CAP = PERF.mobile ? 1.5 : 2;
+  /* 移动端锁 30fps：省一半绘制，肉眼几乎看不出 */
+  var FX_FPS = PERF.low ? 24 : 30;
+
+  /* 简单的帧率闸门。现在 canvas 的限帧统一由 FX 调度器负责，
+     这个工具留给其它需要"最多每秒跑几次"的场景。 */
+  function makeThrottle(fps) {
+    var min = 1000 / fps, last = 0;
+    return function (t) {
+      if (t - last < min) return false;
+      last = t;
+      return true;
+    };
   }
 
   /* 排行榜渲染：贪吃蛇模块和启动逻辑共用同一份实现 */
@@ -232,6 +250,76 @@
       toast('排行榜已清空', 'ok');
     });
   })();
+
+  /* ---------------- 2.0 统一渲染调度器 ----------------
+     站内有多个 canvas 动画。如果每个都自己开一个 requestAnimationFrame，
+     浏览器每帧就要跑多个回调，而且看不见的动画（比如门已关闭后的
+     门禁粒子）会一直空转，白白烧 CPU。
+
+     这里用一个统一的循环调度所有渲染器：
+       · 全程只有一个 rAF
+       · 每个渲染器有自己的帧率上限
+       · 每个渲染器可以单独暂停（不可见时不画）
+       · 页面切到后台时整体停掉
+
+     注意：它只负责"什么时候画"，不碰"怎么画"。
+     所以加上来之后，每个动画的观感和之前完全一致。 */
+  var FX = (function () {
+    var list = [];
+    var raf = null;
+    var lastT = 0;
+
+    function loop(t) {
+      raf = requestAnimationFrame(loop);
+      /* 每帧只取一次时间戳，全部分发下去 */
+      var dt = t - lastT;
+      lastT = t;
+      if (dt < 0) dt = 16;
+
+      for (var i = 0; i < list.length; i++) {
+        var r = list[i];
+        if (!r.on) continue;
+        /* 每个渲染器独立的帧率闸门 */
+        r.acc += dt;
+        var step = 1000 / r.fps;
+        if (r.acc < step) continue;
+        /* 掉帧时不补画多次，直接对齐到当前时间 */
+        r.acc = r.acc % step;
+        r.draw(t);
+      }
+    }
+
+    function ensure() {
+      if (raf === null) { lastT = 0; raf = requestAnimationFrame(loop); }
+    }
+
+    /* 页面不可见时全部停下 —— 后台标签页不该耗电 */
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) {
+        if (raf !== null) { cancelAnimationFrame(raf); raf = null; }
+      } else {
+        ensure();
+      }
+    });
+
+    return {
+      /* draw 每帧调用；fps 是上限；on 控制开关 */
+      add: function (draw, fps) {
+        var r = { draw: draw, fps: fps || 60, acc: 0, on: true };
+        list.push(r);
+        ensure();
+        return r;
+      },
+      remove: function (r) {
+        var i = list.indexOf(r);
+        if (i >= 0) list.splice(i, 1);
+      },
+      count: function () { return list.length; },
+      /* 暴露出来便于调试与自动化测试 */
+      list: function () { return list; }
+    };
+  })();
+  window.FX = FX;
 
   /* 数字滚动：给分数变化加一点动感 */
   function rollNumber(el, to) {
@@ -300,7 +388,6 @@
     if (!gateEl) { root.classList.remove('gate-on'); return; }
 
     var sceneSwipe = $('#sceneSwipe');
-    var sceneHold  = $('#sceneHold');
     var gateDone   = $('#gateDone');
     var bar        = $('#swipeBar');
     var site       = $('#site');
@@ -363,19 +450,18 @@
           ctx.arc(d.x + Math.sin(t / 1900 + d.ph) * 0.3, d.y, d.r, 0, Math.PI * 2);
           ctx.fill();
         }
-        raf = requestAnimationFrame(frame);
       }
       readPalette(); resize();
-      raf = requestAnimationFrame(frame);
-      window.addEventListener('resize', throttle(resize, 240));
+      /* 接入统一调度器。门关闭后这个 canvas 已经 display:none，
+         原来它还在每帧算 80 个粒子 + clearRect —— 纯白烧。
+         现在通过 handle.on 关掉，等门重新出现时再打开。 */
+      var handle = FX.add(frame, 30);
+      window.addEventListener('resize', throttle(resize, 240), { passive: true });
       window.addEventListener('themechange', readPalette);
       if (canHover) {
         window.addEventListener('mousemove', throttle(function (e) { mouse.x = e.clientX; mouse.y = e.clientY; }, 60), { passive: true });
       }
-      document.addEventListener('visibilitychange', function () {
-        if (document.hidden) { if (raf) { cancelAnimationFrame(raf); raf = null; } }
-        else if (!raf) raf = requestAnimationFrame(frame);
-      });
+      window.__gateParticles = handle;
     })();
 
     /* ---------- 第 1 关：轻触开启 ----------
@@ -400,14 +486,17 @@
     function reveal(e) {
       if (passed) return;
       passed = true;
+      /* 第一关的粒子随场景一起收工 */
+      if (window.__gateParticles) window.__gateParticles.on = false;
 
       /* 顺手把这个手势交给音乐 —— 浏览器只允许在用户操作里播放声音。
-         这是「进门就自动放歌」唯一可行的时机。 */
+         这是「进门就自动放歌」唯一可行的时机。
+         注意：这一句必须留在最前面，音乐要靠这次点击的用户手势才能起播。 */
       if (typeof window.__startMusic === 'function') window.__startMusic();
 
+      /* 直接进主页。中间不再有「按住 3 秒」那一关。 */
       sceneSwipe.hidden = true;
-      sceneHold.hidden = false;
-      initHold();
+      enterSite();
     }
 
     /* 点击任意位置都能进；但排除掉门里真正的链接 */
@@ -425,193 +514,6 @@
       }
     }
     document.addEventListener('keydown', onGateKey);
-
-    /* ---------- 第 2 关：按住 3 秒 ---------- */
-    var holdInit = false;
-
-    function initHold() {
-      if (holdInit) return;
-      holdInit = true;
-
-      var btn      = $('#holdBtn');
-      var label    = $('#holdLabel');
-      var clockBox = $('#chalClock');
-      var num      = $('#clockNum');
-      var tag      = $('#clockTag');
-      var ring     = $('#ringFill');
-      var status   = $('#chalStatus');
-
-      var R = 88;
-      var CIRC = 2 * Math.PI * R;                 // 约 552.9
-      ring.style.strokeDasharray = CIRC.toFixed(2);
-      ring.style.strokeDashoffset = CIRC.toFixed(2);
-
-      var holding = false, t0 = 0, ticker = null, finalT = 0, lastShown = -1;
-
-      function paint(t) {
-        num.textContent = t.toFixed(2);
-        var k = Math.min(1, t / HOLD_MAX);
-        ring.style.strokeDashoffset = (CIRC * (1 - k)).toFixed(2);
-
-        var state = t < HOLD_MIN ? 'timing-early' : (t <= HOLD_MAX ? 'timing-good' : 'timing-late');
-        if (!clockBox.classList.contains(state)) {
-          clockBox.classList.remove('timing-early', 'timing-good', 'timing-late');
-          clockBox.classList.add(state);
-        }
-        if (tag) {
-          tag.textContent = t < HOLD_MIN ? '再等等' : (t <= HOLD_MAX ? '就是现在！' : '太久了');
-        }
-      }
-
-      /* 用 setInterval 而不是 requestAnimationFrame：
-         手机在滚动、切后台或省电模式下会节流 RAF，读数会卡住不动。
-         60Hz 的间隔对 0.01 秒的读数完全够用，而且稳定得多。 */
-      function tick() {
-        if (!holding) return;
-        try {
-          var now = (performance.now() - t0) / 1000;
-          /* 读数没变就不重绘，省点开销 */
-          if (now.toFixed(2) !== lastShown) {
-            lastShown = now.toFixed(2);
-            paint(now);
-          }
-        } catch (err) {
-          /* 绘制出任何意外都不该让计时卡死，直接把这次跳过 */
-        }
-      }
-
-      var activeId = null;
-
-      function down(e) {
-        /* 按下期间忽略其他指针（多指乱按不会互相干扰） */
-        if (holding) return;
-        /* 只有鼠标才需要判断左右键：触摸和触控笔没有「左键」这个概念，
-           button 常常是 -1 或 0，用原来的判断会把手机构型误拦掉。 */
-        var ptype = (e && e.pointerType) || (isTouchPointer ? 'touch' : 'mouse');
-        if (ptype === 'mouse' && e && typeof e.button === 'number' && e.button > 0) return;
-        if (e && e.pointerId !== undefined) activeId = e.pointerId;
-        holding = true;
-        t0 = performance.now();
-        btn.classList.add('holding');
-        clockBox.classList.remove('ok', 'bad');
-        status.textContent = '';
-        status.className = 'chal-status';
-        /* 按下之后才把这句话放出来 */
-        var foot = $('#chalFoot');
-        if (foot) {
-          foot.hidden = false;
-          foot.classList.remove('show');
-          void foot.offsetWidth;
-          foot.classList.add('show');
-        }
-        if (label) label.textContent = '松手';
-        lastShown = '0.00';
-        paint(0);
-        clearInterval(ticker);
-        ticker = setInterval(tick, 16);
-      }
-
-      function up(e) {
-        if (!holding) return;
-        /* 只在「明确是另一个指针」时才忽略。实测浏览器给触摸分配的
-           pointerId 有时和 pointerdown 不一致，卡太死会导致松手无响应。 */
-        if (e && e.pointerId !== undefined && activeId !== null &&
-            e.pointerId !== activeId && e.pointerType !== 'touch' && e.pointerType !== 'pen') {
-          return;
-        }
-        activeId = null;
-        holding = false;
-        clearInterval(ticker); ticker = null;
-        btn.classList.remove('holding');
-        if (label) label.textContent = '按住';
-        var footEl = $('#chalFoot');
-        if (footEl) {
-          footEl.classList.remove('show');
-          footEl.hidden = true;
-        }
-        finalT = (performance.now() - t0) / 1000;
-        paint(finalT);
-        judge(finalT);
-      }
-
-      function judge(t) {
-        if (t >= HOLD_MIN && t <= HOLD_MAX) {
-          clockBox.classList.add('ok');
-          clockBox.classList.remove('timing-early', 'timing-good', 'timing-late');
-          if (tag) tag.textContent = '通过';
-          status.textContent = '通过啦！用了 ' + t.toFixed(2) + ' 秒，欢迎光临 ✨';
-          status.className = 'chal-status ok';
-          btn.disabled = true;
-          setTimeout(enterSite, reduceMotion ? 120 : 900);
-          return;
-        }
-        /* 失败 */
-        clockBox.classList.add('bad');
-        clockBox.classList.remove('timing-early', 'timing-good', 'timing-late');
-        if (tag) tag.textContent = '再来';
-        var msg = t < HOLD_MIN ? '太快了！才 ' + t.toFixed(2) + ' 秒，稳住手再试一次'
-                               : '太久了～ ' + t.toFixed(2) + ' 秒，不用按到 4 秒以上';
-        status.textContent = msg;
-        status.className = 'chal-status bad';
-        setTimeout(function () {
-          clockBox.classList.remove('bad');
-          if (tag) tag.textContent = '待机';
-          paint(0);
-          clockBox.classList.remove('timing-early', 'timing-good', 'timing-late');
-          status.textContent = '';
-          status.className = 'chal-status';
-        }, reduceMotion ? 300 : 900);
-      }
-
-      /* 注意：这里刻意不在触摸时监听 pointerleave。
-         真机上手指轻微移动、或指腹超出按钮边缘，浏览器就会派发 pointerleave，
-         导致计时被中断、读数卡死在某个值（手机上表现为「卡住不动」）。
-         鼠标才需要 pointerleave —— 指针移出去应当算松手。 */
-      var isTouchPointer = false;
-
-      btn.addEventListener('pointerdown', function (e) {
-        isTouchPointer = (e.pointerType === 'touch' || e.pointerType === 'pen');
-        down(e);
-      });
-      /* 结束计时只认 pointerup / pointercancel。
-         实测：真机触摸时 pointerleave 会触发多次，且 pointerId 与按下时不同，
-         会绕过校验提前把计时清掉并归零 —— 表现就是读数卡住、松手没反应。
-         所以触摸路径完全不使用 pointerleave。 */
-      btn.addEventListener('pointerup', up);
-      btn.addEventListener('pointercancel', up);
-
-      /* 鼠标移出按钮视为松手（只在确实是鼠标时生效） */
-      btn.addEventListener('pointerleave', function (e) {
-        if (e.pointerType === 'touch' || e.pointerType === 'pen') return;
-        if (isTouchPointer) return;
-        up(e);
-      });
-
-      window.addEventListener('blur', function () { up(); });
-
-      /* 兜底：老浏览器不支持 Pointer Events 时用原生 touch 事件 */
-      if (!window.PointerEvent) {
-        btn.addEventListener('touchstart', function (e) { e.preventDefault(); down(); }, { passive: false });
-        btn.addEventListener('touchend', function (e) { e.preventDefault(); up(); }, { passive: false });
-        btn.addEventListener('touchcancel', function () { up(); });
-      }
-
-      /* 手指（或鼠标）在按钮外松开也要能正确结束，
-         否则会一直停在 holding 状态出不来 */
-      window.addEventListener('pointerup', function (e) { if (holding) up(e); });
-      window.addEventListener('pointercancel', function (e) { if (holding) up(e); });
-      document.addEventListener('visibilitychange', function () {
-        if (document.hidden && holding) up();
-      });
-
-      /* 键盘也能玩 */
-      btn.addEventListener('keydown', function (e) {
-        if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); down(); }
-      });
-      btn.addEventListener('keyup', function (e) {
-        if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); up(); }
-      });
-    }
 
     /* ---------- 进入主站 ---------- */
     function enterSite() {
@@ -648,7 +550,7 @@
     var ctx = cv.getContext('2d');
     if (!ctx) return;
 
-    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var dpr = Math.min(window.devicePixelRatio || 1, DPR_CAP);
     var W = 0, H = 0, raf = null, dots = [];
     var palette = [];
     var mouse = { x: -9999, y: -9999 };
@@ -666,7 +568,11 @@
       build();
     }
     function build() {
-      var n = Math.round(Math.min(72, Math.max(18, (W * H) / 26000)));
+      /* 密度按档位微调，但不再直接砍到六成 —— 观感要保持一致。
+         移动端只降两成左右，肉眼几乎看不出差别。 */
+      var div = PERF.mobile ? 32000 : 26000;
+      var cap = PERF.mobile ? 60 : 72;
+      var n = Math.round(Math.min(cap, Math.max(18, (W * H) / div)));
       dots = [];
       for (var i = 0; i < n; i++) {
         dots.push({
@@ -686,7 +592,7 @@
         var d = dots[i];
         d.x += d.vx; d.y += d.vy;
         var dx = d.x - mouse.x, dy = d.y - mouse.y, d2 = dx * dx + dy * dy;
-        if (d2 < 13000 && d2 > 1) {
+        if (canHover && d2 < 13000 && d2 > 1) {
           var f = (13000 - d2) / 13000 * 0.6, len = Math.sqrt(d2);
           d.x += (dx / len) * f; d.y += (dy / len) * f;
         }
@@ -699,20 +605,18 @@
         ctx.arc(d.x + Math.sin(t / 1800 + d.ph) * 0.28, d.y, d.r, 0, Math.PI * 2);
         ctx.fill();
       }
-      if (running) raf = requestAnimationFrame(frame);
     }
-    var running = true;
-    function start() { if (!raf) { running = true; raf = requestAnimationFrame(frame); } }
-    function stop() { running = false; if (raf) { cancelAnimationFrame(raf); raf = null; } }
-
-    readPalette(); resize(); start();
-    window.addEventListener('resize', throttle(resize, 220));
+    /* 接入统一调度器（30fps 上限）。
+       暂停用 handle.on 控制，不再自己管 rAF。 */
+    readPalette(); resize();
+    var handle = FX.add(frame, FX_FPS);
+    window.addEventListener('resize', throttle(resize, 220), { passive: true });
     window.addEventListener('themechange', readPalette);
     if (canHover) {
       window.addEventListener('mousemove', throttle(function (e) { mouse.x = e.clientX; mouse.y = e.clientY; }, 50), { passive: true });
       window.addEventListener('mouseleave', function () { mouse.x = mouse.y = -9999; });
     }
-    document.addEventListener('visibilitychange', function () { if (document.hidden) stop(); else start(); });
+    window.__siteParticles = handle;
   })();
 
   /* ---------------- 4. 首屏打字机 ---------------- */
@@ -755,7 +659,7 @@
     }, 16);
 
     window.addEventListener('scroll', onScroll, { passive: true });
-    window.addEventListener('resize', onScroll);
+    window.addEventListener('resize', onScroll, { passive: true });
     onScroll();
 
     if (toggle && links) {
@@ -825,25 +729,57 @@
   (function parallax() {
     if (reduceMotion) return;
 
+    /* 移动端把幅度砍到三分之一：少动一点就少一次合成。
+       低配设备干脆关掉 —— 视差是纯装饰，不值得为它掉帧。 */
+    var perf = window.__PERF || {};
+    if (perf.low && perf.mobile) return;
+    var k = perf.mobile ? 0.34 : 1;
+
     var bg = document.querySelector('.bg-deco');
     var art = document.querySelector('.hero-art');
     var nums = $$('.section-title span');
-    var ticking = false;
+
+    /* ---- 关键：几何值只量一次，之后滚动过程中绝不读 DOM ----
+       原来每帧对每个编号调 getBoundingClientRect()，
+       而紧接着又写 style —— 读写交替会强制浏览器同步重排，
+       一滑动就疯狂重排。改成先量好存起来，滚动时只做算术。 */
+    var items = [];
+    var vh = window.innerHeight;
+
+    function measure() {
+      vh = window.innerHeight;
+      var sy = window.scrollY || root.scrollTop || 0;
+      items = nums.map(function (n) {
+        var r = n.getBoundingClientRect();
+        return { el: n, center: r.top + sy + r.height / 2, last: null };
+      });
+    }
+
+    var ticking = false, lastY = -1;
 
     function apply() {
       ticking = false;
-      var y = window.scrollY || root.scrollTop;
+      var y = window.scrollY || root.scrollTop || 0;
+      /* 滚动位置没变就别重复干活 */
+      if (y === lastY) return;
+      lastY = y;
 
-      if (bg) bg.style.setProperty('--par', (-y * 0.1).toFixed(1) + 'px');
-      if (art) art.style.setProperty('--par-art', (y * 0.06).toFixed(1) + 'px');
+      if (bg) bg.style.setProperty('--par', (-y * 0.1 * k).toFixed(1) + 'px');
+      if (art) art.style.setProperty('--par-art', (y * 0.06 * k).toFixed(1) + 'px');
 
-      /* 编号：各自按自身位置反向偏移一点 */
-      nums.forEach(function (n) {
-        var r = n.getBoundingClientRect();
-        if (r.bottom < -80 || r.top > window.innerHeight + 80) return;
-        var mid = r.top + r.height / 2 - window.innerHeight / 2;
-        n.style.setProperty('--par-num', (mid * -0.045).toFixed(1) + 'px');
-      });
+      var mid = vh / 2;
+      for (var i = 0; i < items.length; i++) {
+        var it = items[i];
+        var rel = it.center - y - mid;
+        /* 视野外的直接跳过，别白算 */
+        if (rel < -vh || rel > vh) continue;
+        var v = (rel * -0.045 * k).toFixed(1);
+        /* 值没变就不写，避免无谓的样式失效 */
+        if (v !== it.last) {
+          it.last = v;
+          it.el.style.setProperty('--par-num', v + 'px');
+        }
+      }
     }
 
     function onScroll() {
@@ -852,9 +788,42 @@
       requestAnimationFrame(apply);
     }
 
-    window.addEventListener('scroll', onScroll, { passive: true });
-    window.addEventListener('resize', onScroll);
+    /* 首次量取要等字体和布局稳定；之后只在窗口变化时重量 */
+    function remeasure() {
+      measure();
+      lastY = -1;
+      apply();
+    }
+
+    measure();
     apply();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', throttle(remeasure, 300), { passive: true });
+    window.addEventListener('orientationchange', throttle(remeasure, 300), { passive: true });
+    /* 字体加载完布局会变，重量一次 */
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(function () { setTimeout(remeasure, 60); }).catch(function () {});
+    }
+  })();
+
+  /* ---------------- 6.25 入场动画结束后释放合成层 ----------------
+     这些元素用了 animation-fill-mode，动画跑完属性还挂着，
+     浏览器会继续保留它们的合成层 —— 滚动时白白参与合成。
+     动画一结束就把动画摘掉，图层随即回收。 */
+  (function releaseAnimLayers() {
+    var els = $$('.anim[data-anim]');
+    els.forEach(function (el) {
+      el.addEventListener('animationend', function handler() {
+        el.removeEventListener('animationend', handler);
+        /* 只摘动画，保留最终状态（属性已经落到计算样式里了） */
+        el.style.animation = 'none';
+        /* 下一帧再清掉内联样式，让 CSS 的静态值接手 */
+        requestAnimationFrame(function () {
+          el.style.animation = '';
+          el.classList.add('anim-done');
+        });
+      }, { once: true });
+    });
   })();
 
   /* ---------------- 6.3 区块分隔线（滚动到才亮起） ---------------- */
@@ -879,7 +848,7 @@
     var ctx = cv.getContext('2d');
     if (!ctx) return;
 
-    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var dpr = Math.min(window.devicePixelRatio || 1, DPR_CAP);
     var W = 0, H = 0;
     var ring, glow = { x: -999, y: -999, a: 0 };
     var trailRings = [];   // 拖尾圆环
@@ -895,8 +864,12 @@
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
 
+    /* 数量保持原来的观感，只靠帧率上限省开销 */
+    var MAX_TRAIL = 14;
+    var MAX_SHAPE = 10;
+
     function spawnTrail(x, y) {
-      if (trailRings.length > 14) return;
+      if (trailRings.length > MAX_TRAIL) return;
       trailRings.push({
         x: x, y: y, r: 10 + Math.random() * 10,
         life: 1, max: 1,
@@ -908,7 +881,7 @@
     }
 
     function spawnShape(x, y) {
-      if (shapes.length > 10) return;
+      if (shapes.length > MAX_SHAPE) return;
       shapes.push({
         x: x, y: y,
         size: 5 + Math.random() * 6,
@@ -958,7 +931,7 @@
       ctx.restore();
     }
 
-    function frame() {
+    function frame(ts) {
       t++;
       ctx.clearRect(0, 0, W, H);
 
@@ -1032,13 +1005,13 @@
         ctx.stroke();
         ctx.setLineDash([]);
       }
-
-      requestAnimationFrame(frame);
     }
 
     resize();
-    requestAnimationFrame(frame);
-    window.addEventListener('resize', throttle(resize, 240));
+    /* 接入统一调度器 */
+    var handle = FX.add(frame, FX_FPS);
+    window.__cursorFx = handle;
+    window.addEventListener('resize', throttle(resize, 240), { passive: true });
 
     if (canHover) {
       /* 桌面：指针跟随 + 拖尾 */
@@ -1661,6 +1634,8 @@
     if (!ctx) return;
 
     var scoreEl = $('#snakeScore'), bestEl = $('#snakeBest'), levelEl = $('#snakeLevel');
+    var speedRange = $('#speedRange'), speedRead = $('#speedRead');
+    var speedChips = $$('.speed-chip');
     var overlay = $('#snakeOverlay'), bigEl = $('#snakeBig'), smallEl = $('#snakeSmall');
     var startBtn = $('#snakeStart'), pauseBtn = $('#snakePause'), restartBtn = $('#snakeRestart');
 
@@ -1717,11 +1692,90 @@
 
 
 
-    var snake, dir, nextDir, food, score, alive, paused, timer, tickMs, best;
+    var snake, dir, nextDir, food, score, alive, paused, tickMs, best;
     var runStart = performance.now();
 
     best = Number(store.get(BEST_KEY, '0')) || 0;
     if (bestEl) bestEl.textContent = String(best);
+
+    /* ---------- 速度控制 ----------
+       速度用「毫秒 / 格」表示：数字越大越慢。
+       滑块的值就是这个数字本身，所见即所得。
+       默认 350ms，比原来的 150ms 慢一倍多。 */
+    var SPEED_KEY    = 'fly-snake-speed';
+    var SPEED_DEFAULT = 350;   // 默认：比原版（150ms）慢 2.3 倍
+    var SPEED_MIN    = 100;    // 最快
+    var SPEED_MAX    = 600;    // 最慢
+    var SPEED_STEP   = 10;     // 滑块步长
+    var SPEED_FLOOR  = 100;    // 吃食物加速的下限
+    var manualMs     = SPEED_DEFAULT;
+
+    function clampSpeed(v) {
+      v = Math.round(Number(v));
+      if (!isFinite(v) || isNaN(v)) v = SPEED_DEFAULT;
+      if (v < SPEED_MIN) v = SPEED_MIN;
+      if (v > SPEED_MAX) v = SPEED_MAX;
+      return v;
+    }
+
+    /* 读一遍本地存的速度 */
+    (function loadSpeed() {
+      try {
+        var raw = store.get(SPEED_KEY, '');
+        if (raw !== '' && raw !== null && raw !== undefined) manualMs = clampSpeed(raw);
+      } catch (e) {
+        manualMs = SPEED_DEFAULT;
+      }
+    })();
+
+    /* 根据当前分数算出这一局的实际间隔：
+       在玩家设定的速度上，每吃 5 分快 8ms，最快到 SPEED_FLOOR。
+       所以「慢」只是起点慢，玩久了依然会变快。 */
+    function computeTick() {
+      var fast = manualMs - Math.floor(score / 5) * 8;
+      if (fast < SPEED_FLOOR) fast = SPEED_FLOOR;
+      return fast;
+    }
+
+    /* 把当前速度写回 UI（读数、滑块位置、档位高亮、HUD 等级） */
+    function refreshSpeedUI() {
+      if (speedRead) speedRead.textContent = manualMs + ' 毫秒 / 格';
+      if (speedRange) {
+        speedRange.value = String(manualMs);
+        /* 用 CSS 变量画已填充的那一段，视觉上更直观 */
+        var pct = (manualMs - SPEED_MIN) / (SPEED_MAX - SPEED_MIN) * 100;
+        speedRange.style.setProperty('--speed-fill', pct.toFixed(1) + '%');
+      }
+      if (speedChips) {
+        for (var i = 0; i < speedChips.length; i++) {
+          var chip = speedChips[i];
+          var on = Number(chip.getAttribute('data-speed')) === manualMs;
+          chip.classList.toggle('on', on);
+          chip.setAttribute('aria-pressed', on ? 'true' : 'false');
+        }
+      }
+      if (levelEl) {
+        /* 等级：越快数字越大，1 ~ 10 */
+        var lv = Math.round((SPEED_MAX - manualMs) / (SPEED_MAX - SPEED_MIN) * 9) + 1;
+        levelEl.textContent = String(lv);
+      }
+    }
+
+    /* 实时改速度。立即生效，不重建任何定时器。 */
+    function applySpeed(ms, persist) {
+      manualMs = clampSpeed(ms);
+
+      /* 关键：把累加器归零，丢掉旧节奏的残留时间。
+         这样改完速度下一步立刻按新间隔走，不会有一段过渡的怪节奏。 */
+      acc = 0;
+      lastT = performance.now();
+      if (alive) tickMs = computeTick();
+
+      refreshSpeedUI();
+      if (persist !== false) {
+        try { store.set(SPEED_KEY, String(manualMs)); } catch (e) {}
+      }
+    }
 
     function reset() {
       var mid = Math.floor(COLS / 2);
@@ -1729,9 +1783,10 @@
       dir = { x: 1, y: 0 };
       nextDir = { x: 1, y: 0 };
       score = 0; alive = true; paused = false;
-      tickMs = 150;
+      tickMs = computeTick();   /* 用玩家设定的速度，不再是硬编码的 150 */
       placeFood();
       updateHud();
+      refreshSpeedUI();
     }
 
     function placeFood() {
@@ -1749,56 +1804,122 @@
       rollNumber(bestEl, best);
     }
 
-    /* --- 绘制 --- */
-    function roundRect(x, y, w, h, r) {
-      ctx.beginPath();
-      ctx.moveTo(x + r, y);
-      ctx.arcTo(x + w, y, x + w, y + h, r);
-      ctx.arcTo(x + w, y + h, x, y + h, r);
-      ctx.arcTo(x, y + h, x, y, r);
-      ctx.arcTo(x, y, x + w, y, r);
-      ctx.closePath();
+    /* 遮罩显隐：同时切类名和内联样式。
+       只靠类名在某些环境下会受过渡影响，内联样式最直接。 */
+    function showOverlay(show) {
+      if (!overlay) return;
+      overlay.classList.toggle('hide', !show);
+      overlay.style.opacity = show ? '1' : '0';
+      overlay.style.visibility = show ? 'visible' : 'hidden';
+      overlay.style.pointerEvents = show ? 'auto' : 'none';
     }
 
-    function draw() {
-      var dark = root.getAttribute('data-theme') === 'dark';
-      ctx.clearRect(0, 0, cv.width, cv.height);
+    /* --- 绘制 --- */
+    var bg = document.createElement('canvas');   // 离屏棋盘，只画一次
+    var bgCtx = bg.getContext('2d');
+    var bgTheme = null, bgW = 0;
+    var PAD = 2;                                  // 脏矩形外扩，覆盖圆角抗锯齿边缘
+    var BORDER = 4;                               // 棋盘描边宽度
 
-      /* 棋盘格 */
+    function roundRect(c, x, y, w, h, r) {
+      c.beginPath();
+      c.moveTo(x + r, y);
+      c.arcTo(x + w, y, x + w, y + h, r);
+      c.arcTo(x + w, y + h, x, y + h, r);
+      c.arcTo(x, y + h, x, y, r);
+      c.arcTo(x, y, x + w, y, r);
+      c.closePath();
+    }
+
+    /* 棋盘是静态的 —— 预渲染到离屏 canvas，
+       之后每帧只 blit 需要的几格，不再重画 256 个方块。 */
+    function buildBoard() {
+      bg.width = cv.width; bg.height = cv.height;
+      bgW = cv.width;
+      var dark = root.getAttribute('data-theme') === 'dark';
+      bgTheme = dark;
+      bgCtx.clearRect(0, 0, bg.width, bg.height);
       for (var y = 0; y < ROWS; y++) {
         for (var x = 0; x < COLS; x++) {
           if ((x + y) % 2 === 0) {
-            ctx.fillStyle = dark ? 'rgba(255,255,255,.022)' : 'rgba(120,100,180,.045)';
-            ctx.fillRect(x * CELL, y * CELL, CELL, CELL);
+            bgCtx.fillStyle = dark ? 'rgba(255,255,255,.022)' : 'rgba(120,100,180,.045)';
+            bgCtx.fillRect(x * CELL, y * CELL, CELL, CELL);
           }
         }
       }
+      bgCtx.strokeStyle = dark ? 'rgba(169,156,240,.20)' : 'rgba(120,100,180,.22)';
+      bgCtx.lineWidth = BORDER;
+      bgCtx.strokeRect(BORDER / 2, BORDER / 2, bg.width - BORDER, bg.height - BORDER);
+    }
 
-      /* 食物 */
-      var t = performance.now() / 420;
-      var pulse = 1 + Math.sin(t) * 0.12;
+    function ensureBoard() {
+      var dark = root.getAttribute('data-theme') === 'dark';
+      if (bgW !== cv.width || bgTheme !== dark) buildBoard();
+    }
+
+    /* 只重画一个格子的范围。把外围一圈也算进去：
+       圆角 + 抗锯齿会溢出 1~2px，不外扩就会留下毛边。 */
+    function paintCell(cx, cy, includeBorder) {
+      if (cx < 0 || cy < 0 || cx >= COLS || cy >= ROWS) return;
+      var x = cx * CELL, y = cy * CELL;
+      var dx = x - PAD, dy = y - PAD;
+      var dw = CELL + PAD * 2, dh = CELL + PAD * 2;
+      /* 贴着边的格子要把棋盘描边一起重画，否则描边会被擦掉 */
+      if (includeBorder || cx === 0) { dx -= BORDER; dw += BORDER; }
+      if (includeBorder || cy === 0) { dy -= BORDER; dh += BORDER; }
+      if (includeBorder || cx === COLS - 1) dw += BORDER;
+      if (includeBorder || cy === ROWS - 1) dh += BORDER;
+      drawRegion(dx, dy, dw, dh);
+    }
+
+    /* 重画一个矩形区域：先从离屏棋盘拷底，再画落在里面的食物和蛇 */
+    function drawRegion(dx, dy, dw, dh) {
+      ensureBoard();
+      var dark = root.getAttribute('data-theme') === 'dark';
+      var x1 = dx + dw, y1 = dy + dh;
+
       ctx.save();
-      ctx.shadowColor = dark ? 'rgba(255,217,142,.85)' : 'rgba(214,160,40,.7)';
-      ctx.shadowBlur = 16 * pulse;
-      ctx.fillStyle = dark ? '#ffd98e' : '#e8b23c';
       ctx.beginPath();
-      ctx.arc(food.x * CELL + CELL / 2, food.y * CELL + CELL / 2, CELL * 0.3 * pulse, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
+      ctx.rect(dx, dy, dw, dh);
+      ctx.clip();
 
-      /* 蛇 */
-      snake.forEach(function (s, i) {
+      /* 1. 棋盘底 */
+      ctx.drawImage(bg, 0, 0);
+
+      /* 2. 食物（带脉冲光晕，只在它所在的脏矩形里画） */
+      if (food) {
+        var fx0 = food.x * CELL, fy0 = food.y * CELL;
+        if (fx0 + CELL >= dx && fx0 <= x1 && fy0 + CELL >= dy && fy0 <= y1) {
+          var t = performance.now() / 420;
+          var pulse = 1 + Math.sin(t) * 0.12;
+          ctx.save();
+          ctx.shadowColor = dark ? 'rgba(255,217,142,.85)' : 'rgba(214,160,40,.7)';
+          ctx.shadowBlur = 16 * pulse;
+          ctx.fillStyle = dark ? '#ffd98e' : '#e8b23c';
+          ctx.beginPath();
+          ctx.arc(fx0 + CELL / 2, fy0 + CELL / 2, CELL * 0.3 * pulse, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+      }
+
+      /* 3. 蛇 */
+      for (var i = 0; i < snake.length; i++) {
+        var s = snake[i];
+        var sx = s.x * CELL, sy = s.y * CELL;
+        if (sx + CELL < dx || sx > x1 || sy + CELL < dy || sy > y1) continue;
+
         var head = i === 0;
         var k = 1 - Math.min(0.42, i / (snake.length * 1.9));
         ctx.fillStyle = head
           ? (dark ? '#c9bfff' : '#6547bd')
-          : (dark ? 'rgba(158,201,245,' + (0.55 + k * 0.4) + ')' : 'rgba(123,95,214,' + (0.42 + k * 0.52) + ')');
-        roundRect(s.x * CELL + 1.5, s.y * CELL + 1.5, CELL - 3, CELL - 3, head ? 9 : 7);
+          : (dark ? 'rgba(158,201,245,' + (0.55 + k * 0.4) + ')'
+                  : 'rgba(123,95,214,' + (0.42 + k * 0.52) + ')');
+        roundRect(ctx, sx + 1.5, sy + 1.5, CELL - 3, CELL - 3, head ? 9 : 7);
         ctx.fill();
 
         if (head) {
-          /* 眼睛，跟着方向看 */
-          var cx = s.x * CELL + CELL / 2, cy = s.y * CELL + CELL / 2;
+          var cx = sx + CELL / 2, cy = sy + CELL / 2;
           var ex = dir.y !== 0 ? 5 : 0, ey = dir.x !== 0 ? 5 : 0;
           ctx.fillStyle = dark ? '#221e33' : '#fff';
           [[-ex, -ey], [ex, ey]].forEach(function (o) {
@@ -1807,10 +1928,19 @@
             ctx.fill();
           });
         }
-      });
+      }
+      ctx.restore();
+    }
 
-      /* 暂停遮罩 */
+    /* 整屏重画（开局、换主题、暂停等场景用） */
+    function draw() {
+      ensureBoard();
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      ctx.drawImage(bg, 0, 0);
+      drawRegion(-BORDER, -BORDER, cv.width + BORDER * 2, cv.height + BORDER * 2);
+
       if (paused && alive) {
+        var dark = root.getAttribute('data-theme') === 'dark';
         ctx.fillStyle = dark ? 'rgba(20,18,29,.72)' : 'rgba(253,251,255,.78)';
         ctx.fillRect(0, 0, cv.width, cv.height);
         ctx.fillStyle = dark ? '#ece8fa' : '#38324c';
@@ -1821,9 +1951,19 @@
       }
     }
 
+    /* 只重画被这一改动到的格子 */
+    function paintDirty(cells) {
+      if (!cells.length) return;
+      for (var i = 0; i < cells.length; i++) {
+        paintCell(cells[i].x, cells[i].y, false);
+      }
+    }
+
     /* --- 主循环 --- */
+    /* 走一步。返回"这一步里哪些格子变了" ——
+       交给脏矩形重绘，避免整屏重画。 */
     function step() {
-      if (!alive || paused) return;
+      if (!alive || paused) return null;
 
       /* 应用缓存的转向 */
       if (nextDir.x !== -dir.x || nextDir.y !== -dir.y) dir = nextDir;
@@ -1831,36 +1971,89 @@
       var head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
 
       /* 撞墙 */
-      if (head.x < 0 || head.y < 0 || head.x >= COLS || head.y >= ROWS) return gameOver();
+      if (head.x < 0 || head.y < 0 || head.x >= COLS || head.y >= ROWS) { gameOver(); return null; }
       /* 撞自己（尾巴那一格会移开，所以不算） */
       var willGrow = (head.x === food.x && head.y === food.y);
       var limit = willGrow ? snake.length : snake.length - 1;
       for (var i = 0; i < limit; i++) {
-        if (snake[i].x === head.x && snake[i].y === head.y) return gameOver();
+        if (snake[i].x === head.x && snake[i].y === head.y) { gameOver(); return null; }
       }
 
+      var dirty = [];
+      var oldFood = willGrow ? { x: food.x, y: food.y } : null;
+
       snake.unshift(head);
+
       if (willGrow) {
         score++;
         if (score > best) { best = score; store.set(BEST_KEY, String(best)); }
         placeFood();
         updateHud();
-        /* 每 5 分提速一点 */
-        tickMs = Math.max(62, 150 - Math.floor(score / 5) * 11);
-        restartTimer();
+        /* 每 5 分提速一点（在玩家设定的速度基础上） */
+        tickMs = computeTick();
       } else {
-        snake.pop();
+        var tail = snake.pop();
+        /* 尾巴走掉的那一格要擦掉 */
+        dirty.push(tail);
       }
+
+      /* 新蛇头 + 旧食物位置（吃掉了要擦）+ 新食物位置 */
+      dirty.push(head);
+      if (oldFood) dirty.push(oldFood);
+      if (willGrow && food) dirty.push(food);
+
+      return dirty;
+    }
+
+    /* 绘制与逻辑解耦：
+       原来 setInterval 把"走一步"和"重画整屏"绑在一起，
+       分数高时 tickMs 只有 62ms，却每次都全屏重绘 256 格棋盘。
+       现在绘制走统一调度器的 30fps，且只重画脏格；
+       逻辑仍按 tickMs 走，所以蛇速手感完全不变。 */
+    var fxHandle = null, acc = 0, lastT = 0;
+
+    function ensureFx() {
+      if (fxHandle) return;
+      lastT = performance.now();
+      fxHandle = FX.add(function (t) {
+        var dt = t - lastT; lastT = t;
+        if (dt < 0 || dt > 500) dt = 16;
+
+        if (alive && !paused) {
+          acc += dt;
+          var dirty = null;
+          /* 一帧内可能要补走多步（掉帧时），脏格累积起来一起画 */
+          while (acc >= tickMs) {
+            acc -= tickMs;
+            var d = step();
+            if (!d) break;
+            dirty = dirty ? dirty.concat(d) : d;
+          }
+          if (dirty) {
+            paintDirty(dirty);
+            return;
+          }
+          /* 没走步时，食物还在跳 —— 只重画食物那一格，成本极低 */
+          if (food && !paused) {
+            paintCell(food.x, food.y, false);
+          }
+        }
+      }, 30);
+    }
+
+    function stopFx() {
+      if (fxHandle) { FX.remove(fxHandle); fxHandle = null; }
     }
 
     function restartTimer() {
-      clearInterval(timer);
-      timer = setInterval(function () { step(); draw(); }, tickMs);
+      acc = 0;
+      lastT = performance.now();
+      ensureFx();
     }
 
     function gameOver() {
       alive = false;
-      clearInterval(timer); timer = null;
+      acc = 0;
       var seconds = (performance.now() - runStart) / 1000;
       draw();
       if (bigEl) bigEl.textContent = '游戏结束 · 得分 ' + score;
@@ -1872,13 +2065,13 @@
       }
       describe(score, idx, seconds);
       if (startBtn) startBtn.textContent = '再来一局';
-      if (overlay) overlay.classList.remove('hide');
+      showOverlay(true);
     }
 
     function start() {
       reset();
       runStart = performance.now();
-      if (overlay) overlay.classList.add('hide');
+      showOverlay(false);
       if (pauseBtn) pauseBtn.textContent = '暂停';
       if (rsTitle) rsTitle.textContent = '正在玩…';
       if (rsDesc) rsDesc.textContent = '方向键 / WASD 控制，手机可以滑动屏幕。';
@@ -1891,8 +2084,8 @@
       if (!alive) return;
       paused = !paused;
       if (pauseBtn) pauseBtn.textContent = paused ? '继续' : '暂停';
-      if (paused) { clearInterval(timer); timer = null; }
-      else restartTimer();
+      if (paused) { acc = 0; }
+      else { restartTimer(); }
       draw();
     }
 
@@ -1971,8 +2164,46 @@
       if (document.hidden && alive && !paused) togglePause();
     });
 
+    /* ---------- 速度控制的交互 ---------- */
+    if (speedRange) {
+      /* input 在拖动过程中会连续触发 —— 这就是"实时生效"的来源，
+         中间不需要重开游戏，也不会重建任何定时器。 */
+      speedRange.addEventListener('input', function () {
+        applySpeed(Number(speedRange.value), true);
+      });
+      /* 落定时再存一次，防止个别浏览器 input 不收尾 */
+      speedRange.addEventListener('change', function () {
+        applySpeed(Number(speedRange.value), true);
+      });
+    }
+    if (speedChips) {
+      for (var ci = 0; ci < speedChips.length; ci++) {
+        (function (chip) {
+          chip.addEventListener('click', function () {
+            applySpeed(Number(chip.getAttribute('data-speed')), true);
+          });
+        })(speedChips[ci]);
+      }
+    }
+
     reset();
     draw();
+    refreshSpeedUI();
+
+    /* 只读探针：给自动化测试用，不参与任何逻辑，也不写任何状态 */
+    window.__snakeState = function () {
+      return {
+        head: snake && snake[0] ? { x: snake[0].x, y: snake[0].y } : null,
+        len: snake ? snake.length : 0,
+        score: score,
+        best: best,
+        alive: alive,
+        paused: paused,
+        tickMs: tickMs,
+        manualMs: manualMs,
+        food: food ? { x: food.x, y: food.y } : null
+      };
+    };
   })();
 
   /* ---------------- 11.4 音乐律动引擎 ----------------
@@ -1980,34 +2211,48 @@
      由 CSS 驱动光晕、强调色、音条的呼吸。
      拿不到真实频谱时（跨域音频等）退回正弦模拟，效果不丢。 */
   var Beat = (function () {
-    var analyser = null, data = null, raf = null, source = null;
+    var analyser = null, data = null, source = null;
     var beating = false, simT = 0;
-    var bars = null;
+    var host = null, handle = null;
 
-    function barsEl() {
-      if (!bars) bars = document.getElementById('beatBars');
-      return bars;
+    /* 变量只写在专用的 .beat-veil 上。
+       自定义属性会沿继承链往下传播，写在哪一层，那一层的整个子树
+       都会因为这次改动而样式失效。
+       写在 <html> 上 = 整篇文档重算；
+       写在 .site 上 = 500+ 个元素重算（实测帧率 46 -> 21）；
+       写在专用的空元素上 = 只有它自己。
+       光晕、边框这些视觉效果全部用它的伪元素实现。 */
+    function hostEl() {
+      if (!host) host = document.getElementById('beatVeil');
+      return host;
     }
+
+    /* 频段更新间隔：15fps。
+       视觉上完全看不出（本来就是慢速呼吸），
+       但样式重算次数从 60 次/秒降到 15 次/秒。 */
+    var INTERVAL = 66;
+    var lastWrite = 0;
 
     function setBeat(v) {
-      root.style.setProperty('--beat', v.toFixed(3));
-      var b = barsEl();
-      if (b) {
-        var kids = b.children;
-        for (var i = 0; i < kids.length; i++) {
-          /* 每根条错开一点相位，看起来更像真的 */
-          var ph = i * 0.7;
-          var h = 6 + Math.max(0, Math.sin(simT * 3 + ph)) * 20 * (0.4 + v);
-          kids[i].style.height = h.toFixed(1) + 'px';
-        }
-      }
+      var now = performance.now();
+      if (now - lastWrite < INTERVAL) return;
+      lastWrite = now;
+      var el = hostEl();
+      if (el) el.style.setProperty('--beat', v.toFixed(2));
     }
 
-    function loop() {
-      if (!beating) return;
-      simT += 0.05;
-      var v = 0;
+    var lastBeatT = 0;
 
+    /* 由统一调度器驱动的循环。dt 是真实毫秒数，
+       所以模拟节拍的推进量要按时间算，不能按帧数累加。 */
+    function loop(t) {
+      if (!beating) return;
+      var dt = t - lastBeatT;
+      lastBeatT = t;
+      if (dt < 0 || dt > 500) dt = INTERVAL;
+      simT += dt * 0.01;
+
+      var v = 0;
       if (analyser && data) {
         analyser.getByteFrequencyData(data);
         var sum = 0;
@@ -2015,15 +2260,12 @@
         var n = Math.min(24, data.length);
         for (var i = 0; i < n; i++) sum += data[i];
         v = (sum / n) / 255;
-        /* 低音偏多，压缩一下动态范围 */
         v = Math.min(1, Math.pow(v, 0.75) * 1.5);
       } else {
-        /* 模拟：两拍一循环，带一点强弱变化 */
         v = 0.22 + 0.5 * Math.pow(Math.max(0, Math.sin(simT * 2.2)), 3);
       }
 
       setBeat(v);
-      raf = requestAnimationFrame(loop);
     }
 
     return {
@@ -2054,17 +2296,18 @@
         if (beating) return;
         beating = true;
         document.body.classList.add('music-live');
-        raf = requestAnimationFrame(loop);
+        /* 音条由 CSS 自己跳，这里不碰任何元素。
+           频段更新频率仍按 INTERVAL 走（约 15fps），观感不变。 */
+        lastBeatT = performance.now();
+        if (handle) FX.remove(handle);
+        handle = FX.add(loop, Math.round(1000 / INTERVAL));
       },
       stop: function () {
         beating = false;
-        if (raf) { cancelAnimationFrame(raf); raf = null; }
+        if (handle) { FX.remove(handle); handle = null; }
         document.body.classList.remove('music-live');
-        root.style.setProperty('--beat', '0');
-        var b = barsEl();
-        if (b) {
-          for (var i = 0; i < b.children.length; i++) b.children[i].style.height = '';
-        }
+        var el = hostEl();
+        if (el) el.style.setProperty('--beat', '0');
       }
     };
   })();

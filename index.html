@@ -27,8 +27,42 @@
      原来直接引 fonts.googleapis.com，在国内手机网络下这个请求会一直挂着，
      而它是渲染阻塞资源 —— 表现就是打开后一直白屏。
      现在改用 同目录下的字体分片（按 unicode-range 只加载用到的部分）。 -->
-<link rel="preload" as="style" href="fonts.css">
-<link rel="stylesheet" href="fonts.css">
+<!-- 性能档位：必须同步判定，否则会先用满特效渲染再降级，反而更卡。
+     判据：触摸设备 / 屏幕宽度 / CPU 核心数 / 是否开了省流量。
+     结果写在 <html> 的类上，CSS 与 JS 共用同一套档位。 -->
+<script>
+(function () {
+  var de = document.documentElement;
+  var touch = ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
+  var narrow = Math.min(window.innerWidth, (window.screen && screen.width) || 9999) <= 820;
+  var cores = navigator.hardwareConcurrency || 4;
+  var saveData = !!(navigator.connection && navigator.connection.saveData);
+
+  /* 触摸 + 窄屏才算移动端 */
+  var mobile = touch && narrow;
+  /* 低配：真正的弱机 —— 核心数很少、内存小、或者用户开了省流量。
+     不能简单用 mobile 当判据：旗舰机也是 mobile，
+     那样会白白丢掉所有特效，反而显得简陋。 */
+  var mem = navigator.deviceMemory || 0;
+  var low = saveData || cores <= 4 || (mobile && mem && mem <= 4);
+
+  de.classList.add(mobile ? 'is-mobile' : 'is-desktop');
+  if (low) de.classList.add('perf-low');
+  if (touch) de.classList.add('touch');
+
+  window.__PERF = { mobile: mobile, low: low, cores: cores, saveData: saveData, touch: touch };
+})();
+</script>
+
+<!-- 字体策略：自托管分片共 102 个 / 4.2MB。
+     中文网页字体按 unicode-range 分片下载，实测手机上仍要下 41 个分片 / 1.5MB，
+     首屏被拖到 4.8 秒（对比：不下字体只要 2.9 秒）。
+     所以窄屏直接用系统字体，一个字节都不下。
+     styles.css 里每个 font-family 都写好了系统兜底：
+       "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif
+     桌面端（宽度 >= 821px）保持网络字体，观感完全不变。 -->
+<link rel="stylesheet" href="fonts.css" media="(min-width: 821px)">
+<noscript><link rel="stylesheet" href="fonts.css"></noscript>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -69,53 +103,12 @@
     </button>
 
     <div class="gate-brand">
-      <img src="fly-avatar.jpg" alt="" width="220" height="209">
+      <img src="fly-avatar.jpg" alt="" width="220" height="209" decoding="async">
       <span>fly</span>
       <em>PERSONAL SITE</em>
     </div>
 
     <p class="gate-foot" aria-hidden="true">NTE · 2026 · <span id="gateClock">00:00:00</span></p>
-  </section>
-
-  <!-- 第 2 关：3 秒挑战 -->
-  <section class="gate-scene" id="sceneHold" data-scene="hold" hidden>
-    <div class="gate-bg" aria-hidden="true">
-      <span class="gate-grid"></span>
-      <span class="gate-glow gg-1"></span>
-      <span class="gate-glow gg-2"></span>
-    </div>
-
-    <div class="chal">
-      <header class="chal-head">
-        <span class="chal-badge"><i class="pulse-dot"></i> 人机验证</span>
-        <h2 class="chal-title">证明你是个有耐心的人</h2>
-        <p class="chal-desc">按住下面的按钮开始计时，在 <strong>3 秒</strong> 的时候松手</p>
-      </header>
-
-      <div class="chal-clock" id="chalClock">
-        <svg class="clock-ring" viewBox="0 0 200 200" aria-hidden="true">
-          <circle class="ring-track" cx="100" cy="100" r="88"></circle>
-          <circle class="ring-fill"  cx="100" cy="100" r="88" id="ringFill"></circle>
-        </svg>
-        <div class="clock-read">
-          <span class="clock-num" id="clockNum">0.00</span>
-          <span class="clock-unit">秒</span>
-        </div>
-        <span class="clock-tag" id="clockTag">待机</span>
-      </div>
-
-      <p class="chal-foot" id="chalFoot" hidden>嘿嘿，咱就单纯想控你 3 秒，略略略</p>
-      <button class="hold-btn" id="holdBtn" type="button">
-        <span class="hold-ring" aria-hidden="true"></span>
-        <span class="hold-face">
-          <span class="hold-icon" aria-hidden="true"></span>
-          <span class="hold-label" id="holdLabel">按住</span>
-        </span>
-      </button>
-
-      <p class="chal-note">在 <b>2 秒 ~ 4 秒</b> 之间松手就能通过，差了就得重来</p>
-      <p class="chal-status" id="chalStatus" role="status" aria-live="polite"></p>
-    </div>
   </section>
 
   <!-- 通关瞬间 -->
@@ -131,6 +124,10 @@
 <div class="site" id="site" aria-hidden="true">
 
 <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+
+<!-- 音乐律动的专用载体：JS 只改这一个元素的 --beat，
+     样式失效范围就锁死在它身上，不会波及其他 500 多个元素 -->
+<div class="beat-veil" id="beatVeil" aria-hidden="true"></div>
 
 <div class="bg-deco" aria-hidden="true">
   <span class="blob blob-1"></span>
@@ -213,7 +210,8 @@
       <div class="hero-art anim" data-anim="scale" data-delay="2">
         <div class="art-bob">
           <div class="art-frame" data-tilt>
-            <img src="fly.jpg" alt="fly 的 Q 版形象" width="560" height="531" fetchpriority="high">
+            <img src="fly.jpg" alt="fly 的 Q 版形象" width="560" height="531"
+                 fetchpriority="high" decoding="async">
             <span class="art-badge">本命 · 蓝发小军帽</span>
           </div>
         </div>
@@ -257,7 +255,7 @@
           <li><span class="k">昵称</span><span class="v">fly</span></li>
           <li><span class="k">身份</span><span class="v">大一新生</span></li>
           <li><span class="k">方向</span><span class="v">在摸索，偏计算机</span></li>
-          <li><span class="k">属性</span><span class="v">好奇 / 慢热 / 能熬夜</span></li>
+          <li><span class="k">属性</span><span class="v">好奇 / 热情 / 能熬夜</span></li>
           <li><span class="k">本命</span><span class="v">蓝发小军帽</span></li>
           <li><span class="k">本命色</span><span class="v">深蓝 · 亮黄</span></li>
           <li><span class="k">口头禅</span><span class="v">「让我再试一次」</span></li>
@@ -490,6 +488,35 @@
         <button class="dpad-btn left"  type="button" data-dir="left"  aria-label="向左">←</button>
         <button class="dpad-btn down"  type="button" data-dir="down"  aria-label="向下">↓</button>
         <button class="dpad-btn right" type="button" data-dir="right" aria-label="向右">→</button>
+      </div>
+
+      <!-- 速度控制条 -->
+      <div class="snake-speed">
+        <div class="speed-head">
+          <label class="speed-title" for="speedRange">🐢 速度</label>
+          <output class="speed-read" id="speedRead" for="speedRange">350 毫秒 / 格</output>
+        </div>
+
+        <input class="speed-range" id="speedRange" type="range"
+               min="100" max="600" step="10" value="350"
+               aria-label="调整贪吃蛇速度，数值越大越慢"
+               aria-describedby="speedHint">
+
+        <div class="speed-foot">
+          <span class="speed-end">快</span>
+          <div class="speed-presets" role="group" aria-label="快捷速度">
+            <button class="speed-chip" type="button" data-speed="150">很快</button>
+            <button class="speed-chip" type="button" data-speed="250">稍快</button>
+            <button class="speed-chip" type="button" data-speed="350">标准</button>
+            <button class="speed-chip" type="button" data-speed="500">悠闲</button>
+            <button class="speed-chip" type="button" data-speed="600">龟速</button>
+          </div>
+          <span class="speed-end">慢</span>
+        </div>
+
+        <p class="speed-hint" id="speedHint">
+          拖动滑块即可随时改速度，立即生效，不用重开。分数越高蛇会自己再快一点。
+        </p>
       </div>
 
       <p class="snake-tip">吃到金色的果子会变长，撞到自己或者墙就结束。分数越高速度越快。</p>

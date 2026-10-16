@@ -18,6 +18,9 @@
   --surface:     rgba(255, 255, 255, .82);
   --surface-2:   #ffffff;
   --surface-3:   #f8f5ff;
+  /* 关掉毛玻璃后用的实色底，保证可读性 */
+  --surface-solid: #fdfbff;
+  --nav-solid:     rgba(253, 251, 255, .97);
   --ink:         #38324c;
   --ink-2:       #675f83;
   --ink-3:       #9a92b0;
@@ -86,9 +89,13 @@ html[data-theme="dark"] {
   --surface:     rgba(34, 30, 51, .78);
   --surface-2:   #221e33;
   --surface-3:   #2a2540;
+  --surface-solid: #221e33;
+  --nav-solid:     rgba(24, 21, 38, .97);
   --ink:         #ece8fa;
   --ink-2:       #b3abc9;
-  --ink-3:       #837b9c;
+  /* 原为 #837b9c：在深色卡片上只有 3.7:1，达不到 AA 的 4.5。
+     提亮后约 5.3:1，仍然保持"弱化"的观感。 */
+  --ink-3:       #9f97ba;
   --line:        rgba(169, 156, 240, .16);
   --line-2:      rgba(169, 156, 240, .32);
 
@@ -844,9 +851,15 @@ html[data-theme="dark"] .theme-icon::after { opacity: 1; }
   margin-right: 7px;
   animation: pulse 2.2s ease-in-out infinite;
 }
-@keyframes pulse {
-  0%, 100% { box-shadow: 0 0 0 3px rgba(79, 202, 141, .22); }
-  50%      { box-shadow: 0 0 0 8px rgba(79, 202, 141, 0); }
+/* 脉冲环：用 transform + opacity，跑在合成器上。
+   原来是 box-shadow 从 3px 扩散到 8px —— 每帧都要重新光栅化阴影。 */
+@keyframes rippleOut {
+  from { transform: scale(.7); opacity: .55; }
+  to   { transform: scale(2.6); opacity: 0; }
+}
+@keyframes glowPulse {
+  from { transform: scale(1);    opacity: .45; }
+  to   { transform: scale(1.08); opacity: 1; }
 }
 
 .skills {
@@ -1653,10 +1666,6 @@ html[data-theme="dark"] .cursor-glow {
   touch-action: none;
   overscroll-behavior: contain;
 }
-/* 验证场景同理，避免按住时误触滚动 */
-.gate-scene[data-scene="hold"] {
-  touch-action: manipulation;
-}
 .gate-scene[hidden] { display: none; }
 
 .gate-bg { position: absolute; inset: 0; overflow: hidden; }
@@ -1785,235 +1794,13 @@ html[data-theme="dark"] .cursor-glow {
 .gate.dragging .swipe-hint { animation: none; }
 .gate.dragging .swipe-dot { animation: none; }
 
-/* ---- 3 秒挑战 ---- */
-.chal {
-  position: relative;
-  width: min(460px, 100%);
-  text-align: center;
-  display: grid;
-  justify-items: center;
-  gap: 18px;
-  animation: fadeUp .6s var(--ease-out);
-}
-@keyframes fadeUp {
-  from { opacity: 0; transform: translateY(18px); }
-  to   { opacity: 1; transform: none; }
-}
-
-.chal-head { display: grid; gap: 8px; justify-items: center; }
-
-.chal-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 5px 15px;
-  border-radius: var(--r-full);
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  box-shadow: var(--shadow-xs);
-  font-size: var(--fz-xs);
-  font-weight: 700;
-  color: var(--lav-deep);
-  letter-spacing: .06em;
-}
-.pulse-dot {
-  width: 7px; height: 7px;
-  border-radius: 50%;
-  background: var(--green);
-  animation: pulse 2s ease-in-out infinite;
-}
-
-.chal-title { font-size: var(--fz-xl); margin: 0; }
-.chal-desc { color: var(--ink-2); font-size: var(--fz-md); margin: 0; }
-.chal-desc strong { color: var(--lav-deep); }
-
-/* 计时表 */
-.chal-clock {
-  position: relative;
-  width: 190px; height: 190px;
-  display: grid;
-  place-items: center;
-}
-.clock-ring { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
-.clock-ring circle { fill: none; stroke-width: 7; stroke-linecap: round; }
-.ring-track { stroke: var(--line); }
-.ring-fill {
-  stroke: url(#none);
-  stroke: var(--lav);
-  stroke-dasharray: 553;
-  stroke-dashoffset: 553;
-  transition: stroke .2s;
-}
-
-.clock-read { display: grid; justify-items: center; line-height: 1; }
-.clock-num {
-  font-size: 42px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -.02em;
-  color: var(--ink);
-}
-.clock-unit { font-size: var(--fz-xs); color: var(--ink-3); margin-top: 5px; letter-spacing: .18em; }
-
-.clock-tag {
-  position: absolute;
-  bottom: -6px;
-  padding: 3px 13px;
-  border-radius: var(--r-full);
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  font-size: var(--fz-xs);
-  font-weight: 700;
-  color: var(--ink-3);
-  transition: color var(--t), border-color var(--t), background var(--t);
-}
-/* 时机三态：太早 / 刚好 / 太晚 */
-.chal-clock.timing-early .ring-fill { stroke: var(--lav); }
-.chal-clock.timing-early .clock-tag { color: var(--lav-deep); }
-.chal-clock.timing-good .ring-fill { stroke: var(--green); }
-.chal-clock.timing-good .clock-num { color: var(--green); }
-.chal-clock.timing-good .clock-tag {
-  color: #fff; background: var(--green); border-color: transparent;
-  animation: okPop .4s var(--spring);
-}
-.chal-clock.timing-late .ring-fill { stroke: var(--pink-deep); }
-.chal-clock.timing-late .clock-tag { color: var(--pink-deep); }
-
-.chal-clock.ok .clock-tag { color: #fff; background: var(--green); border-color: transparent; }
-.chal-clock.ok .ring-fill { stroke: var(--green); }
-.chal-clock.ok .clock-num { color: var(--green); }
-.chal-clock.bad .clock-tag { color: #fff; background: var(--pink-deep); border-color: transparent; }
-.chal-clock.bad .ring-fill { stroke: var(--pink-deep); }
-.chal-clock.bad { animation: shake .42s var(--ease); }
-@keyframes shake {
-  0%, 100% { transform: translateX(0); }
-  20% { transform: translateX(-9px); }
-  40% { transform: translateX(8px); }
-  60% { transform: translateX(-5px); }
-  80% { transform: translateX(3px); }
-}
-.chal-clock.ok { animation: okPop .5s var(--spring); }
 @keyframes okPop {
   0% { transform: scale(1); }
   45% { transform: scale(1.07); }
   100% { transform: scale(1); }
 }
-
-/* 按住按钮 */
-.hold-btn {
-  position: relative;
-  width: 130px; height: 130px;
-  border: none;
-  border-radius: 50%;
-  background: none;
-  padding: 0;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-  touch-action: none;
-  user-select: none;
-}
-.hold-ring {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: 2px solid var(--line-2);
-  transition: transform var(--t) var(--spring), border-color var(--t);
-}
-.hold-ring::after {
-  content: "";
-  position: absolute;
-  inset: -10px;
-  border-radius: 50%;
-  border: 2px dashed var(--line);
-  opacity: .7;
-  animation: spinSlow 12s linear infinite;
-}
 @keyframes spinSlow { to { transform: rotate(360deg); } }
-
-.hold-face {
-  position: absolute;
-  inset: 12px;
-  border-radius: 50%;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  box-shadow: var(--shadow);
-  display: grid;
-  place-items: center;
-  gap: 4px;
-  transition: transform var(--t) var(--spring), box-shadow var(--t), background var(--t);
-}
-.hold-icon {
-  width: 26px; height: 26px;
-  border-radius: 50%;
-  border: 2.5px solid var(--lav-deep);
-  position: relative;
-}
-.hold-icon::after {
-  content: "";
-  position: absolute;
-  inset: 5px;
-  border-radius: 50%;
-  background: var(--lav-deep);
-  transition: transform var(--t) var(--spring);
-}
-.hold-label { font-size: var(--fz-sm); font-weight: 700; color: var(--lav-deep); }
-
-.hold-btn:hover .hold-ring { transform: scale(1.05); border-color: var(--lav); }
-.hold-btn:hover .hold-face { transform: scale(1.04); box-shadow: var(--shadow-lg); }
-.hold-btn.holding .hold-face { background: var(--grad-strong); }
-.hold-btn.holding .hold-icon { border-color: #fff; }
-.hold-btn.holding .hold-icon::after { background: #fff; transform: scale(1.35); }
-.hold-btn.holding .hold-label { color: #fff; }
-.hold-btn.holding .hold-ring { transform: scale(1.1); border-color: var(--lav); }
-.hold-btn:disabled { cursor: default; }
-
-.chal-note { font-size: var(--fz-sm); color: var(--ink-3); margin: 0; }
-.chal-note b { color: var(--lav-deep); }
-
-.chal-status {
-  min-height: 1.6em;
-  margin: 0;
-  font-size: var(--fz-md);
-  font-weight: 700;
-  transition: color var(--t);
-}
-.chal-status.ok  { color: var(--green); }
-.chal-status.bad { color: var(--pink-deep); }
-
-.chal-foot {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin: 10px 0 0;
-  padding: 9px 20px;
-  border-radius: var(--r-full);
-  /* 只在下按之后才亮相，所以这里可以做得显眼一点 */
-  background: linear-gradient(120deg, rgba(101, 71, 189, .14), rgba(168, 60, 107, .16));
-  border: 1px solid rgba(168, 60, 107, .38);
-  color: var(--pink-deep);
-  font-size: var(--fz-md);
-  font-weight: 700;
-  letter-spacing: .03em;
-  box-shadow: 0 6px 20px rgba(168, 60, 107, .14);
-  opacity: 0;
-  transform: translateY(8px) scale(.96);
-  transition: opacity .4s var(--ease), transform .5s var(--spring);
-}
-.chal-foot[hidden] { display: none; }
-.chal-foot.show {
-  opacity: 1;
-  transform: none;
-  animation: footBreath 2.6s ease-in-out .5s infinite;
-}
-@keyframes footBreath {
-  0%, 100% { box-shadow: 0 6px 20px rgba(168, 60, 107, .14); }
-  50%      { box-shadow: 0 8px 26px rgba(168, 60, 107, .3); }
-}
-html[data-theme="dark"] .chal-foot {
-  background: linear-gradient(120deg, rgba(201, 191, 255, .16), rgba(255, 180, 205, .18));
-  border-color: rgba(255, 180, 205, .45);
-  color: var(--pink-deep);
-}
+/* 阴影呼吸改成透明度呼吸，成本从"重绘"降到"合成" */
 
 /* 通关瞬间 */
 .gate-done {
@@ -2445,10 +2232,6 @@ html.has-touch .to-top { bottom: 96px; }
 }
 
 @media (max-width: 640px) {
-  .chal-clock { width: 158px; height: 158px; }
-  .clock-num { font-size: 34px; }
-  .hold-btn { width: 112px; height: 112px; }
-  .hold-face { inset: 10px; }
   .gate-brand { top: 16px; left: 16px; font-size: 18px; }
   .gate-brand img { width: 34px; height: 32px; }
   .swipe-progress { bottom: 38px; }
@@ -2607,11 +2390,18 @@ html.has-touch .dpad { display: grid; }
   text-align: center;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, .4), 0 0 40px rgba(29, 78, 216, .28), inset 0 0 40px rgba(29, 78, 216, .1);
   transition: transform .3s var(--ease), box-shadow .3s, border-color .3s;
-  animation: invitePulse 3.6s ease-in-out infinite;
 }
-@keyframes invitePulse {
-  0%, 100% { box-shadow: 0 0 0 1px rgba(0,0,0,.4), 0 0 34px rgba(29,78,216,.24), inset 0 0 30px rgba(29,78,216,.08); }
-  50%      { box-shadow: 0 0 0 1px rgba(0,0,0,.4), 0 0 60px rgba(77,163,255,.42), inset 0 0 46px rgba(29,78,216,.18); }
+/* 呼吸的外层光晕：静态阴影 + 只做缩放淡入，
+   避免每帧重新光栅化 60px 的模糊阴影。 */
+.tap-invite::after {
+  content: "";
+  position: absolute;
+  inset: -14px;
+  z-index: -1;
+  background: radial-gradient(closest-side, rgba(77, 163, 255, .5), transparent 72%);
+  animation: glowPulse 3.6s ease-in-out infinite alternate;
+  pointer-events: none;
+  will-change: transform, opacity;
 }
 .tap-invite:hover {
   transform: translateY(-3px);
@@ -2714,32 +2504,6 @@ html.has-touch .dpad { display: grid; }
 /* 进门后整页向上滑走 */
 .gate.gone { transform: translateY(-100%); opacity: 0; }
 
-/* 验证关沿用冷色 */
-.gate-scene[data-scene="hold"] .chal-badge,
-.gate-scene[data-scene="hold"] .clock-tag {
-  background: rgba(6, 10, 18, .7);
-  border-color: rgba(127, 212, 255, .3);
-  color: var(--g-blue-2);
-}
-.gate-scene[data-scene="hold"] .chal-title,
-.gate-scene[data-scene="hold"] .clock-num { color: var(--g-ink); }
-.gate-scene[data-scene="hold"] .chal-desc,
-.gate-scene[data-scene="hold"] .chal-note,
-.gate-scene[data-scene="hold"] .chal-foot { color: var(--g-dim); }
-.gate-scene[data-scene="hold"] .chal-desc strong,
-.gate-scene[data-scene="hold"] .chal-note b { color: var(--g-blue-2); }
-.gate-scene[data-scene="hold"] .ring-track { stroke: rgba(127, 212, 255, .16); }
-.gate-scene[data-scene="hold"] .ring-fill  { stroke: var(--g-blue); }
-.gate-scene[data-scene="hold"] .chal-clock.timing-good .ring-fill { stroke: #35e0a1; }
-.gate-scene[data-scene="hold"] .hold-face {
-  background: rgba(8, 13, 22, .85);
-  border-color: rgba(127, 212, 255, .35);
-}
-.gate-scene[data-scene="hold"] .hold-icon { border-color: var(--g-blue-2); }
-.gate-scene[data-scene="hold"] .hold-icon::after { background: var(--g-blue-2); }
-.gate-scene[data-scene="hold"] .hold-label { color: var(--g-blue-2); }
-.gate-scene[data-scene="hold"] .hold-ring { border-color: rgba(127, 212, 255, .3); }
-
 /* 门的粒子画布压暗一点，别抢焦点 */
 #gateCanvas { opacity: .55; }
 
@@ -2798,17 +2562,20 @@ html.has-touch .dpad { display: grid; }
 }
 /* 呼吸的蓝点，暗示「活的通道」 */
 .inbox-pulse {
+  position: relative;
   flex: 0 0 auto;
   width: 9px; height: 9px;
   border-radius: 50%;
   background: #35c2ff;
-  box-shadow: 0 0 0 0 rgba(53, 194, 255, .6);
-  animation: inboxPulse 2.2s ease-out infinite;
 }
-@keyframes inboxPulse {
-  0%   { box-shadow: 0 0 0 0 rgba(53, 194, 255, .55); }
-  70%  { box-shadow: 0 0 0 12px rgba(53, 194, 255, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(53, 194, 255, 0); }
+.inbox-pulse::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: #35c2ff;
+  animation: rippleOut 2.2s ease-out infinite;
+  will-change: transform, opacity;
 }
 html[data-theme="dark"] .inbox-note {
   background: linear-gradient(120deg, rgba(77, 163, 255, .16), rgba(29, 78, 216, .12));
@@ -2903,10 +2670,189 @@ html[data-theme="dark"] .inbox-note {
 /* ===========================================================
    28 音乐反馈
    =========================================================== */
-.music-btn.playing { animation: musicPulse 2.4s ease-in-out infinite; }
-@keyframes musicPulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 168, 197, .0), var(--shadow); }
-  50%      { box-shadow: 0 0 0 9px rgba(255, 168, 197, .16), var(--shadow); }
+/* 播放中的耳机按钮：静态阴影 + 一层会扩散的伪元素 */
+.music-btn.playing { box-shadow: 0 0 0 2px rgba(255, 168, 197, .35), var(--shadow); }
+.music-btn.playing::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: inherit;
+  background: rgba(255, 168, 197, .3);
+  animation: rippleOut 2.4s ease-out infinite;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+/* ===========================================================
+   贪吃蛇速度控制条
+   =========================================================== */
+.snake-speed {
+  margin: var(--sp-4) auto var(--sp-4);
+  width: min(100%, 480px);
+  padding: 14px 16px 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: var(--surface-3);
+  display: grid;
+  gap: 10px;
+}
+
+.speed-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.speed-title {
+  font-size: var(--fz-sm);
+  font-weight: 700;
+  color: var(--ink-2);
+  letter-spacing: .04em;
+}
+
+/* 读数：等宽数字，改速度时不会左右跳 */
+.speed-read {
+  font-size: var(--fz-sm);
+  font-weight: 700;
+  color: var(--lav-deep);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ---------- 滑块 ---------- */
+.speed-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 26px;                 /* 给拇指留出手指友好的触控高度 */
+  background: transparent;
+  cursor: pointer;
+  touch-action: pan-y;          /* 横向拖滑块，纵向仍能滚页面 */
+  margin: 0;
+}
+
+/* 轨道 */
+.speed-range::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg,
+              var(--pink) 0%,
+              var(--lav) 45%,
+              var(--blue) 100%);
+  opacity: .55;
+}
+.speed-range::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg,
+              var(--pink) 0%,
+              var(--lav) 45%,
+              var(--blue) 100%);
+  opacity: .55;
+}
+
+/* 拇指 */
+.speed-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 22px; height: 22px;
+  margin-top: -8px;             /* (6 - 22) / 2 */
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--lav-deep);
+  box-shadow: 0 2px 8px rgba(101, 71, 189, .35);
+  transition: transform .15s var(--ease), box-shadow .15s;
+}
+.speed-range::-moz-range-thumb {
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--lav-deep);
+  box-shadow: 0 2px 8px rgba(101, 71, 189, .35);
+}
+.speed-range:hover::-webkit-slider-thumb { transform: scale(1.1); }
+.speed-range:active::-webkit-slider-thumb {
+  transform: scale(1.18);
+  box-shadow: 0 0 0 8px rgba(169, 156, 240, .18), 0 2px 10px rgba(101, 71, 189, .4);
+}
+.speed-range:focus-visible {
+  outline: 2px solid var(--lav);
+  outline-offset: 4px;
+  border-radius: 999px;
+}
+
+/* ---------- 档位与两端标注 ---------- */
+.speed-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.speed-end {
+  font-size: var(--fz-xs);
+  color: var(--ink-3);
+  flex: 0 0 auto;
+}
+
+.speed-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1 1 auto;
+  justify-content: center;
+}
+
+.speed-chip {
+  font: inherit;
+  font-size: var(--fz-xs);
+  padding: 4px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line-2);
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background var(--t), color var(--t), border-color var(--t), transform var(--t) var(--spring);
+  -webkit-tap-highlight-color: transparent;
+}
+.speed-chip:hover {
+  border-color: var(--lav);
+  color: var(--lav-deep);
+}
+.speed-chip:active { transform: scale(.94); }
+
+/* 选中态：只在「滑块值正好等于这个档位」时高亮，
+   这样拖动滑块时高亮会自然跟着走或消失。 */
+.speed-chip.on {
+  background: var(--lav-deep);
+  border-color: var(--lav-deep);
+  color: #2a2140;
+  font-weight: 700;
+}
+html[data-theme="dark"] .speed-chip.on { color: #221e33; }
+
+.speed-hint {
+  margin: 0;
+  font-size: var(--fz-xs);
+  color: var(--ink-3);
+  line-height: var(--lh-snug);
+  text-align: center;
+}
+
+/* ---------- 窄屏 ---------- */
+@media (max-width: 560px) {
+  .snake-speed { padding: 12px 11px 11px; gap: 9px; }
+  /* 让 5 个档位在手机上排成一行，不要换行 */
+  .speed-foot { gap: 6px; }
+  .speed-presets { gap: 4px; flex-wrap: nowrap; }
+  .speed-chip {
+    padding: 5px 6px;
+    font-size: 11px;
+    letter-spacing: -.02em;
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  .speed-end { font-size: 11px; }
 }
 
 /* ===========================================================
@@ -2949,10 +2895,12 @@ html.gate-passed .section-title::after {
 html.gate-passed .anim[data-anim="up"] {
   animation-name: animUpSoft;
 }
+/* 只用 transform + opacity：这两个跑在合成器上，不占主线程。
+   原来是 filter: blur(4px) -> 0，43 个元素同时跑，
+   blur 会强制离屏渲染再软件合成，手机上直接掉到十几帧。 */
 @keyframes animUpSoft {
-  0%   { opacity: 0; transform: translateY(34px) scale(.985); filter: blur(4px); }
-  60%  { filter: blur(0); }
-  100% { opacity: 1; transform: none; filter: blur(0); }
+  from { opacity: 0; transform: translate3d(0, 30px, 0) scale(.99); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
 }
 
 /* 区块之间加一条会亮一下的细线，滚动时像 HUD 在响应 */
@@ -3070,26 +3018,44 @@ html.gate-passed .anim[data-anim="up"] {
    =========================================================== */
 /* JS 把节拍强度写进 --beat（0~1），这里用它驱动光晕与强调色呼吸。
    只在播放时才有明显变化，暂停时归零，不影响静态观感。 */
-body.music-live {
+/* 律动的专用载体。
+   JS 只改这一个元素的 --beat —— 自定义属性会沿继承链传播，
+   写在 <html> 上等于整篇文档样式失效，写在 .site 上是 500+ 个元素，
+   写在专用空元素上就只有它自己。 */
+.beat-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
   --beat: 0;
+  opacity: 0;
+  transition: opacity .5s var(--ease);
 }
-body.music-live .bg-deco .blob {
-  filter: blur(72px) saturate(calc(1 + var(--beat) * .5));
-  opacity: calc(var(--blob-op) + var(--beat) * .18);
+body.music-live .beat-veil { opacity: 1; }
+
+/* 中央光晕：透明度跟着节拍呼吸。
+   opacity 是合成器属性，不触发重绘，是这里唯一"便宜"的选择。 */
+.beat-veil::before {
+  content: "";
+  position: absolute;
+  left: 50%; top: 46%;
+  width: min(92vmin, 700px);
+  height: min(92vmin, 700px);
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(closest-side,
+              rgba(169, 156, 240, calc(.06 + var(--beat) * .16)),
+              rgba(255, 157, 188, calc(.02 + var(--beat) * .07)),
+              transparent 72%);
+  will-change: opacity;
 }
-body.music-live .section-title span {
-  filter: drop-shadow(0 0 calc(var(--beat) * 16px) rgba(169, 156, 240, .9));
-}
-body.music-live .brand-avatar {
-  box-shadow: 0 0 0 2px var(--lav),
-              0 0 calc(var(--beat) * 22px) rgba(169, 156, 240, calc(.3 + var(--beat) * .6));
-}
-body.music-live .card,
-body.music-live .post,
-body.music-live .contact-card {
-  border-color: color-mix(in srgb,
-    var(--lav) calc(var(--beat) * 45%),
-    var(--line));
+
+/* 四角的细描边，随节拍亮一下 */
+.beat-veil::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgba(169, 156, 240, calc(var(--beat) * .3));
 }
 /* 跟着节拍轻轻起伏的音条（装在音乐按钮旁边） */
 .beat-bars {
@@ -3105,13 +3071,28 @@ body.music-live .contact-card {
   transition: opacity var(--t);
 }
 body.music-live .beat-bars { opacity: .9; }
+/* 音条由 CSS 自己跳，JS 完全不用管。
+   原来每帧要改 5 个元素的高度 —— 那是在主线程上做 5 次样式写。
+   现在换成 keyframes：合成器/渲染器自己跑，主线程零参与。 */
 .beat-bars i {
   display: block;
   width: 3px;
   border-radius: 2px;
   background: var(--grad);
-  height: calc(6px + var(--beat) * 20px);
-  transition: height .12s linear;
+  height: 8px;
+  transform-origin: bottom;
+  animation: barJump .72s ease-in-out infinite alternate;
+  animation-play-state: paused;
+}
+body.music-live .beat-bars i { animation-play-state: running; }
+.beat-bars i:nth-child(1) { animation-delay: 0s;    animation-duration: .62s; }
+.beat-bars i:nth-child(2) { animation-delay: -.18s; animation-duration: .78s; }
+.beat-bars i:nth-child(3) { animation-delay: -.34s; animation-duration: .54s; }
+.beat-bars i:nth-child(4) { animation-delay: -.5s;  animation-duration: .84s; }
+.beat-bars i:nth-child(5) { animation-delay: -.66s; animation-duration: .68s; }
+@keyframes barJump {
+  from { transform: scaleY(.35); }
+  to   { transform: scaleY(2.6); }
 }
 
 /* ===========================================================
@@ -3163,9 +3144,12 @@ html[data-theme="dark"] .contact-card::after {
 html.gate-passed .section-title {
   animation: titleIn .9s var(--ease-out) both;
 }
+/* letter-spacing 每个字的位置都会变 -> 逐帧文字重排；
+   filter: blur 逐帧离屏合成。两个都是手机上最贵的属性。
+   换成位移 + 淡入，效果相近但基本免费。 */
 @keyframes titleIn {
-  0%   { opacity: 0; letter-spacing: .12em; filter: blur(3px); }
-  100% { opacity: 1; letter-spacing: normal; filter: blur(0); }
+  from { opacity: 0; transform: translate3d(-14px, 0, 0); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0); }
 }
 
 /* 首屏滚动提示：换成会呼吸的胶囊 */
@@ -3221,12 +3205,156 @@ html.theme-flash::after {
   .gate .gate-brand { gap: 8px; font-size: 16px; }
   .gate .gate-brand em { display: none; }
   .gate .gate-foot { font-size: 10.5px; right: 16px; bottom: 14px; }
-
-  /* 验证关也收一点，防止计时表贴边 */
-  .chal { gap: 14px; }
-  .chal-title { font-size: 19px; }
-  .chal-desc, .chal-note { font-size: 13.5px; }
 }
+
+/* ===========================================================
+   34 性能档位适配
+   =========================================================== */
+/* 档位由 <head> 里的同步脚本判定，写在 <html> 的类上：
+     html.is-mobile   触摸 + 窄屏
+     html.perf-low    移动端 / 核心少 / 省流量
+     html.touch       有触摸
+   CSS 和 JS 共用同一套判据，不会出现"JS 关了但 CSS 还开着"。 */
+
+/* ---- 低配档：砍掉一切"贵"的东西 ---- */
+
+/* 毛玻璃是移动端头号杀手：每帧都要重新采样背景并做模糊。
+   实测站内有 23 个元素带 backdrop-filter（每张卡片 + 导航栏）。 */
+/* 毛玻璃在触摸设备上关闭（因为它是移动端最大的性能瓶颈），
+   桌面端完全保留。这是唯一为了性能做的视觉让步，
+   而且是在手机上 —— 卡片本来就叠着半透明底，磨砂感的差别很细微。 */
+html.is-mobile .nav,
+html.is-mobile .card,
+html.is-mobile .post,
+html.is-mobile .contact-card,
+html.is-mobile .proj,
+html.is-mobile .cat,
+html.is-mobile .board,
+html.is-mobile .snake-overlay,
+html.is-mobile .reader,
+html.is-mobile .reader-panel,
+html.is-mobile .tap-invite,
+html.perf-low .nav,
+html.perf-low .card,
+html.perf-low .post,
+html.perf-low .contact-card,
+html.perf-low .proj,
+html.perf-low .cat,
+html.perf-low .board,
+html.perf-low .snake-overlay,
+html.perf-low .reader,
+html.perf-low .reader-panel,
+html.perf-low .tap-invite {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* 关掉毛玻璃后要靠实色底撑住可读性，否则会透出后面的内容 */
+html.is-mobile .nav,
+html.perf-low .nav {
+  background: var(--nav-solid, rgba(24, 21, 38, .96));
+}
+html.is-mobile .card,
+html.is-mobile .post,
+html.is-mobile .proj,
+html.is-mobile .cat,
+html.is-mobile .board,
+html.is-mobile .contact-card,
+html.is-mobile .reader-panel,
+html.is-mobile .snake-overlay,
+html.perf-low .card,
+html.perf-low .post,
+html.perf-low .proj,
+html.perf-low .cat,
+html.perf-low .board,
+html.perf-low .contact-card,
+html.perf-low .reader-panel,
+html.perf-low .snake-overlay { background: var(--surface-solid); }
+html.is-mobile .tap-invite,
+html.perf-low .tap-invite { background: rgba(6, 10, 18, .88); }
+
+/* 大半径模糊滤镜：每个都要开一层离屏缓冲再卷积，手机 GPU 扛不住 */
+/* blur(90px) 要开一层巨大的离屏缓冲再卷积，手机上非常贵。
+   缩小半径后视觉上几乎看不出，成本降一个数量级。 */
+html.is-mobile .gate-glow,
+html.perf-low .gate-glow { filter: blur(44px) !important; opacity: .38; }
+html.is-mobile .blob,
+html.perf-low .blob { filter: blur(46px) !important; }
+html.is-mobile .gs-tri,
+html.perf-low .gs-tri { filter: none !important; }
+
+/* 大模糊阴影一律削弱。阴影是绘制成本，模糊半径越大越贵 */
+html.perf-low .card,
+html.perf-low .post,
+html.perf-low .proj,
+html.perf-low .cat,
+html.perf-low .board,
+html.perf-low .contact-card,
+html.perf-low .poke-wrap,
+html.perf-low .snake-wrap {
+  box-shadow: 0 2px 8px rgba(30, 20, 60, .12) !important;
+}
+html.perf-low .btn,
+html.perf-low .to-top,
+html.perf-low .music-btn {
+  box-shadow: 0 2px 6px rgba(30, 20, 60, .16) !important;
+}
+
+/* 入场动画在低配上缩短并错开：
+   43 个元素如果同时开始，等于同一帧要处理 43 个合成层。 */
+html.perf-low .anim[data-anim="up"] {
+  animation-duration: .42s;
+}
+html.perf-low .anim[data-delay="1"] { animation-delay: .06s; }
+html.perf-low .anim[data-delay="2"] { animation-delay: .12s; }
+html.perf-low .anim[data-delay="3"] { animation-delay: .18s; }
+html.perf-low .anim[data-delay="4"] { animation-delay: .24s; }
+
+/* 低配档：律动光晕整层不要 —— 它每 66ms 就要改一次变量 */
+html.perf-low .beat-veil { display: none !important; }
+html.perf-low .ask-item,
+html.perf-low [class*="glow"] { animation: none !important; }
+
+/* 常驻装饰动画（光斑漂浮、三角浮动、漂浮小图标）全部保留。
+   它们都是 transform/opacity 动画，跑在合成器上，不是瓶颈。
+   真正贵的是毛玻璃和模糊滤镜，那两项已经单独处理。 */
+
+/* 卡片光扫过保留 —— 它只在 hover 时触发，
+   而触摸设备根本没有 hover，本来就不会跑。 */
+
+/* 视差保留。低配档只把幅度降到三分之一（在 JS 里做），
+   位移本身走 transform，不产生重排。 */
+
+/* ---- 移动端专属：把"桌面才需要"的东西去掉 ---- */
+
+/* 光标特效在触摸设备上没有指针，只剩点击爆发。
+   爆发本身很有反馈感，保留；但关掉它的大范围光晕（已在 JS 里做）。 */
+html.is-mobile .cursor-fx { opacity: .9; }
+
+/* 门上的扫描线动画是持续重绘，手机上省掉 */
+html.is-mobile .gate-scan::after { animation: none; opacity: .5; }
+
+/* 门禁装饰圆环的旋转：两个大圆环持续旋转 = 持续合成 */
+html.is-mobile .gs-ring-1,
+html.is-mobile .gs-ring-2 { animation-duration: 90s; }
+
+/* 首屏装饰漂浮：幅度小但一直在动 */
+html.is-mobile .float-1,
+html.is-mobile .float-2,
+html.is-mobile .float-3,
+html.is-mobile .art-float { animation-duration: 12s; }
+
+/* 之前给长列表加过 content-visibility: auto 来跳过屏外渲染，
+   但它会让快速滚动时出现局部空白闪烁 —— 属于"视觉效果被改变"。
+   已移除：这几个列表本来就只有几条，收益远小于风险。 */
+
+/* 触摸设备：去掉 hover 相关的过渡，它们永远不会触发 */
+html.touch .card:hover::after,
+html.touch .post:hover::after,
+html.touch .contact-card:hover::after { transform: none; }
+
+/* 滚动容器开启惯性滚动与合成层提示 */
+.msg-list, .board-list, .reader-body { -webkit-overflow-scrolling: touch; }
 
 /* ==================== 14 响应式 ==================== */
 @media (max-width: 1080px) {
