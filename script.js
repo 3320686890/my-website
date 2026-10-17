@@ -382,25 +382,34 @@
     else if (mq.addListener) mq.addListener(onSys);
   })();
 
-  /* ---------------- 2. 入场门：上滑 → 3 秒挑战 ---------------- */
+  /* ---------------- 2. 入场门：轻触开启（赛博朋克） ----------------
+     这是打开网页看到的第一屏。点任意位置就进去，门向上滑走，
+     直接看到主站内容，中间没有任何额外提示或停留。
+
+     这一次点击同时是「用户手势」，正好用来启动背景音乐：
+     浏览器只允许在用户操作里播放声音，所以音乐挂在这里最稳。 */
   (function gate() {
     var gateEl = $('#gate');
-    if (!gateEl) { root.classList.remove('gate-on'); return; }
-
+    var site = $('#site');
     var sceneSwipe = $('#sceneSwipe');
-    var gateDone   = $('#gateDone');
-    var bar        = $('#swipeBar');
-    var site       = $('#site');
 
-    /* ---------- 门内粒子 ---------- */
+    /* 极端情况：门元素缺失就直接放行，绝不把页面卡住 */
+    if (!gateEl || !sceneSwipe) {
+      root.classList.remove('gate-on');
+      root.classList.add('gate-passed');
+      if (site) site.setAttribute('aria-hidden', 'false');
+      return;
+    }
+
+    /* ---------- 门内的漂浮粒子 ---------- */
     (function gateParticles() {
       var cv = $('#gateCanvas');
       if (!cv || reduceMotion) return;
       var ctx = cv.getContext('2d');
       if (!ctx) return;
 
-      var dpr = Math.min(window.devicePixelRatio || 1, 2);
-      var W = 0, H = 0, dots = [], raf = null;
+      var dpr = Math.min(window.devicePixelRatio || 1, DPR_CAP);
+      var W = 0, H = 0, dots = [];
       var palette = [];
       var mouse = { x: -9999, y: -9999 };
 
@@ -417,7 +426,10 @@
         build();
       }
       function build() {
-        var n = Math.round(Math.min(80, Math.max(20, (W * H) / 24000)));
+        /* 手机屏幕小，少画一些，观感几乎无差 */
+        var cap = PERF.mobile ? 46 : 80;
+        var div = PERF.mobile ? 34000 : 24000;
+        var n = Math.round(Math.min(cap, Math.max(20, (W * H) / div)));
         dots = [];
         for (var i = 0; i < n; i++) {
           dots.push({
@@ -432,12 +444,14 @@
         }
       }
       function frame(t) {
+        /* 门已经收起来了就不用再算了 */
+        if (sceneSwipe.hidden) return;
         ctx.clearRect(0, 0, W, H);
         for (var i = 0; i < dots.length; i++) {
           var d = dots[i];
           d.x += d.vx; d.y += d.vy;
           var dx = d.x - mouse.x, dy = d.y - mouse.y, d2 = dx * dx + dy * dy;
-          if (d2 < 16000 && d2 > 1) {
+          if (canHover && d2 < 16000 && d2 > 1) {
             var f = (16000 - d2) / 16000 * 0.7, len = Math.sqrt(d2);
             d.x += (dx / len) * f; d.y += (dy / len) * f;
           }
@@ -452,25 +466,18 @@
         }
       }
       readPalette(); resize();
-      /* 接入统一调度器。门关闭后这个 canvas 已经 display:none，
-         原来它还在每帧算 80 个粒子 + clearRect —— 纯白烧。
-         现在通过 handle.on 关掉，等门重新出现时再打开。 */
-      var handle = FX.add(frame, 30);
+      /* 接入统一调度器（30fps 上限），门收起后停掉 */
+      window.__gateParticles = FX.add(frame, FX_FPS);
       window.addEventListener('resize', throttle(resize, 240), { passive: true });
       window.addEventListener('themechange', readPalette);
       if (canHover) {
-        window.addEventListener('mousemove', throttle(function (e) { mouse.x = e.clientX; mouse.y = e.clientY; }, 60), { passive: true });
+        window.addEventListener('mousemove', throttle(function (e) {
+          mouse.x = e.clientX; mouse.y = e.clientY;
+        }, 60), { passive: true });
       }
-      window.__gateParticles = handle;
     })();
 
-    /* ---------- 第 1 关：轻触开启 ----------
-       改成点击任意位置就开门。比上滑流畅得多，
-       手机上也不会再被浏览器当成滚动手势吞掉。
-       这一次点击同时也是「用户手势」，正好用来启动背景音乐。 */
-    var passed = false;
-
-    /* 门上的小时钟（纯装饰，让赛博感更足） */
+    /* ---------- 门上的数字时钟（纯装饰） ---------- */
     (function gateClock() {
       var el = $('#gateClock');
       if (!el) return;
@@ -483,29 +490,45 @@
       setInterval(tick, 1000);
     })();
 
-    function reveal(e) {
-      if (passed) return;
-      passed = true;
-      /* 第一关的粒子随场景一起收工 */
+    var entered = false;
+
+    /* 进站：门向上滑走，主站立刻可见，不做任何停留。 */
+    function enterSite() {
+      root.classList.remove('gate-on');
+      root.classList.add('gate-passed');
+      if (site) site.setAttribute('aria-hidden', 'false');
+      gateEl.classList.add('gone');
+      /* 让主站的入场动画重新触发 */
+      window.dispatchEvent(new Event('gate:passed'));
+      setTimeout(function () {
+        gateEl.style.display = 'none';
+      }, reduceMotion ? 60 : 900);
+    }
+
+    function reveal() {
+      if (entered) return;
+      entered = true;
+
+      /* 借这次点击的用户手势启动背景音乐。
+         放在最前面，因为它依赖"当前正在用户操作中"这个时机。 */
+      try {
+        if (typeof window.__startMusic === 'function') window.__startMusic();
+      } catch (e) {}
+
+      /* 门里的粒子随场景一起收工 */
       if (window.__gateParticles) window.__gateParticles.on = false;
 
-      /* 顺手把这个手势交给音乐 —— 浏览器只允许在用户操作里播放声音。
-         这是「进门就自动放歌」唯一可行的时机。
-         注意：这一句必须留在最前面，音乐要靠这次点击的用户手势才能起播。 */
-      if (typeof window.__startMusic === 'function') window.__startMusic();
-
-      /* 直接进主页。中间不再有「按住 3 秒」那一关。 */
       sceneSwipe.hidden = true;
       enterSite();
     }
 
-    /* 点击任意位置都能进；但排除掉门里真正的链接 */
+    /* 点任意位置都能进；排除门里真正的链接 */
     sceneSwipe.addEventListener('click', function (e) {
-      if (e.target.closest('a[href]')) return;
-      reveal(e);
+      if (e.target && e.target.closest && e.target.closest('a[href]')) return;
+      reveal();
     });
 
-    /* 键盘：回车 / 空格 / 方向上 都能进 */
+    /* 键盘：回车 / 空格 / 方向上 也能进 */
     function onGateKey(e) {
       if (sceneSwipe.hidden) return;
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowUp') {
@@ -514,33 +537,6 @@
       }
     }
     document.addEventListener('keydown', onGateKey);
-
-    /* ---------- 进入主站 ---------- */
-    function enterSite() {
-      if (gateDone) {
-        gateDone.hidden = false;
-      }
-      setTimeout(function () {
-        gateEl.classList.add('gone');
-        root.classList.remove('gate-on');
-        root.classList.add('gate-passed');
-        if (site) site.setAttribute('aria-hidden', 'false');
-        /* 让主站的入场动画重新触发 */
-        window.dispatchEvent(new Event('gate:passed'));
-        setTimeout(function () { gateEl.style.display = 'none'; }, reduceMotion ? 60 : 900);
-      }, reduceMotion ? 80 : 620);
-    }
-
-    /* 偏好减少动效时，直接给个「跳过」的出口 */
-    if (reduceMotion) {
-      var skip = document.createElement('button');
-      skip.type = 'button';
-      skip.className = 'link-btn';
-      skip.textContent = '跳过入场';
-      skip.style.cssText = 'position:absolute;right:22px;bottom:18px;z-index:5;';
-      skip.addEventListener('click', function () { setProgress(1); reveal(); });
-      gateEl.appendChild(skip);
-    }
   })();
 
   /* ---------------- 3. 主站：主题粒子 ---------------- */
@@ -1690,8 +1686,6 @@
       if (rsDesc) rsDesc.textContent = desc;
     }
 
-
-
     var snake, dir, nextDir, food, score, alive, paused, tickMs, best;
     var runStart = performance.now();
 
@@ -1857,21 +1851,6 @@
       if (bgW !== cv.width || bgTheme !== dark) buildBoard();
     }
 
-    /* 只重画一个格子的范围。把外围一圈也算进去：
-       圆角 + 抗锯齿会溢出 1~2px，不外扩就会留下毛边。 */
-    function paintCell(cx, cy, includeBorder) {
-      if (cx < 0 || cy < 0 || cx >= COLS || cy >= ROWS) return;
-      var x = cx * CELL, y = cy * CELL;
-      var dx = x - PAD, dy = y - PAD;
-      var dw = CELL + PAD * 2, dh = CELL + PAD * 2;
-      /* 贴着边的格子要把棋盘描边一起重画，否则描边会被擦掉 */
-      if (includeBorder || cx === 0) { dx -= BORDER; dw += BORDER; }
-      if (includeBorder || cy === 0) { dy -= BORDER; dh += BORDER; }
-      if (includeBorder || cx === COLS - 1) dw += BORDER;
-      if (includeBorder || cy === ROWS - 1) dh += BORDER;
-      drawRegion(dx, dy, dw, dh);
-    }
-
     /* 重画一个矩形区域：先从离屏棋盘拷底，再画落在里面的食物和蛇 */
     function drawRegion(dx, dy, dw, dh) {
       ensureBoard();
@@ -1951,14 +1930,6 @@
       }
     }
 
-    /* 只重画被这一改动到的格子 */
-    function paintDirty(cells) {
-      if (!cells.length) return;
-      for (var i = 0; i < cells.length; i++) {
-        paintCell(cells[i].x, cells[i].y, false);
-      }
-    }
-
     /* --- 主循环 --- */
     /* 走一步。返回"这一步里哪些格子变了" ——
        交给脏矩形重绘，避免整屏重画。 */
@@ -2019,25 +1990,20 @@
         var dt = t - lastT; lastT = t;
         if (dt < 0 || dt > 500) dt = 16;
 
-        if (alive && !paused) {
-          acc += dt;
-          var dirty = null;
-          /* 一帧内可能要补走多步（掉帧时），脏格累积起来一起画 */
-          while (acc >= tickMs) {
-            acc -= tickMs;
-            var d = step();
-            if (!d) break;
-            dirty = dirty ? dirty.concat(d) : d;
-          }
-          if (dirty) {
-            paintDirty(dirty);
-            return;
-          }
-          /* 没走步时，食物还在跳 —— 只重画食物那一格，成本极低 */
-          if (food && !paused) {
-            paintCell(food.x, food.y, false);
-          }
+        if (!alive || paused) return;
+
+        /* 逻辑推进：一帧内可能要补走多步（掉帧时） */
+        acc += dt;
+        while (acc >= tickMs) {
+          acc -= tickMs;
+          if (!step()) break;      /* step 返回 null 表示游戏结束 */
         }
+
+        /* 绘制：每帧无条件整屏重绘。
+           —— 这是修复残影的关键。
+           原来只重画"变化的格子"，一旦漏算就留下旧像素；
+           现在每帧从清空开始，画面永远等于当前状态。 */
+        draw();
       }, 30);
     }
 
@@ -2190,20 +2156,6 @@
     draw();
     refreshSpeedUI();
 
-    /* 只读探针：给自动化测试用，不参与任何逻辑，也不写任何状态 */
-    window.__snakeState = function () {
-      return {
-        head: snake && snake[0] ? { x: snake[0].x, y: snake[0].y } : null,
-        len: snake ? snake.length : 0,
-        score: score,
-        best: best,
-        alive: alive,
-        paused: paused,
-        tickMs: tickMs,
-        manualMs: manualMs,
-        food: food ? { x: food.x, y: food.y } : null
-      };
-    };
   })();
 
   /* ---------------- 11.4 音乐律动引擎 ----------------
@@ -2281,16 +2233,36 @@
         } catch (e) { analyser = null; data = null; return false; }
       },
       attachElement: function (el, ctx) {
+        /* 关键顺序：先把 source 接到扬声器，再分一路给分析器。
+           MediaElementSource 一旦创建，音频就不再直接出声，
+           必须由我们自己接回 destination。如果先连 analyser、
+           而 analyser->destination 那步失败，声音就彻底没了。
+           先接 destination 可以保证任何情况下都有声音。 */
         try {
           source = ctx.createMediaElementSource(el);
+        } catch (e) {
+          source = null;
+          return false;
+        }
+        try {
+          source.connect(ctx.destination);
+        } catch (e2) {
+          /* 连扬声器都失败：这个元素已经没声音了，只能放弃接入 */
+          return false;
+        }
+        try {
           analyser = ctx.createAnalyser();
           analyser.fftSize = 128;
           analyser.smoothingTimeConstant = 0.72;
           data = new Uint8Array(analyser.frequencyBinCount);
           source.connect(analyser);
-          analyser.connect(ctx.destination);
           return true;
-        } catch (e) { analyser = null; data = null; return false; }
+        } catch (e3) {
+          /* 分析器失败不影响出声，只是没有真实频谱，退回模拟节拍 */
+          analyser = null;
+          data = null;
+          return false;
+        }
       },
       start: function () {
         if (beating) return;
@@ -2331,24 +2303,19 @@
       btn.title = on ? '点一下暂停' : '点一下放首歌';
     }
 
-    /* ---------- 方案 A：外部音频文件 ---------- */
-    function tryFile(done) {
+    /* ---------- 方案 A：外部音频文件 ----------
+       不再用 canplaythrough 做预检。
+       原来那个写法有个致命问题：3.2MB 的 mp3 在手机上 1.6 秒内
+       到不了 canplaythrough，就被当成"文件不存在"退回合成音了。
+       现在直接交给 play()，浏览器会自己等缓冲。 */
+    function makeAudio() {
       var a = new Audio();
       a.loop = true;
-      a.volume = 0.5;
+      a.volume = 0.45;
       a.preload = 'auto';
-      var settled = false;
-      a.addEventListener('canplaythrough', function () {
-        if (settled) return; settled = true;
-        audioEl = a; done(true);
-      });
-      a.addEventListener('error', function () {
-        if (settled) return; settled = true;
-        done(false);
-      });
-      setTimeout(function () { if (!settled) { settled = true; done(false); } }, 1600);
       a.src = 'bgm.mp3';
       a.load();
+      return a;
     }
 
     /* ---------- 方案 B：Web Audio 合成 ---------- */
@@ -2446,50 +2413,103 @@
        否则就没声音了。失败时退回模拟节拍，不影响播放。 */
     var fileCtx = null;
     function hookFile(el) {
-      if (fileCtx) return;
       var AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) { Beat.start(); return; }
+
+      /* 已经建过：确保没被挂起，并把律动重新拉起来
+         （暂停音乐会 Beat.stop，恢复时要能再 start） */
+      if (fileCtx) {
+        if (fileCtx.state === 'suspended' && fileCtx.resume) {
+          try { fileCtx.resume(); } catch (e) {}
+        }
+        Beat.start();
+        return;
+      }
+
       try {
         fileCtx = new AC();
-        if (Beat.attachElement(el, fileCtx)) Beat.start();
-        else Beat.start();
       } catch (e) {
         fileCtx = null;
         Beat.start();
+        return;
       }
+
+      /* 自动播放策略下 AudioContext 可能是 suspended，主动恢复一次 */
+      if (fileCtx.state === 'suspended' && fileCtx.resume) {
+        try { fileCtx.resume(); } catch (e) {}
+      }
+
+      /* 接入分析器。失败也没关系 —— attachElement 内部已经保证
+         声音接回了扬声器，只是频谱退回模拟节拍。 */
+      try { Beat.attachElement(el, fileCtx); } catch (e) {}
+      Beat.start();
     }
 
     function startPlaying() {
       if (playing || started) return;
       started = true;
 
+      /* 之前已经建好 audio，只是被自动播放策略拦了一次。
+         这里重试：要同时把律动重新启动、并更新提示。 */
       if (usingFile) {
         if (audioEl) {
           hookFile(audioEl);
-          audioEl.play().then(function () { setUI(true); })
-            .catch(function () { started = false; });
+          Beat.start();
+          audioEl.play().then(function () {
+            setUI(true);
+            toast('🎵 Moon Halo · 正在播放', 'ok');
+          }).catch(function (err) {
+            var name = (err && err.name) || '';
+            started = false;
+            if (name === 'NotAllowedError') {
+              toast('点一下右下角耳机就能听歌 🎧', 'ok');
+            } else {
+              /* 文件真的播不了，退回合成音 */
+              usingFile = false;
+              audioEl = null;
+              Beat.stop();
+              if (synthStart()) { setUI(true); toast('给你放了段轻音乐 🎵', 'ok'); }
+            }
+          });
         }
         return;
       }
 
-      /* 先看有没有音频文件；没有就退回现场合成 */
-      tryFile(function (ok) {
-        if (ok) {
-          usingFile = true;
-          audioEl.volume = 0.45;
-          hookFile(audioEl);
-          audioEl.play().then(function () {
-            setUI(true);
-            toast('🎵 Moon Halo · 正在播放', 'ok');
-          }).catch(function () {
-            started = false;
-            Beat.stop();
-            toast('音乐被浏览器拦下了，点右下角耳机试试', 'bad');
-          });
-        } else {
-          if (synthStart()) { setUI(true); toast('给你放了段轻音乐 🎵', 'ok'); }
-          else { started = false; }
+      /* 直接创建 audio 并播放，不做任何预检 */
+      audioEl = makeAudio();
+      usingFile = true;
+      hookFile(audioEl);
+
+      var p = audioEl.play();
+      if (!p || typeof p.then !== 'function') {
+        /* 老浏览器 play() 不返回 Promise */
+        setUI(true);
+        toast('🎵 Moon Halo · 正在播放', 'ok');
+        return;
+      }
+
+      p.then(function () {
+        setUI(true);
+        toast('🎵 Moon Halo · 正在播放', 'ok');
+      }).catch(function (err) {
+        var name = (err && err.name) || '';
+
+        /* 浏览器自动播放策略拦截。
+           这不是"文件坏了"，不能退回合成音 ——
+           保留现场，等用户下一次手势（点耳机 / 点页面）再试。 */
+        if (name === 'NotAllowedError') {
+          started = false;
+          Beat.stop();
+          toast('点一下右下角耳机就能听歌 🎧', 'ok');
+          return;
         }
+
+        /* 其它情况（404 / 解码失败）才退回现场合成的轻音乐 */
+        usingFile = false;
+        audioEl = null;
+        Beat.stop();
+        if (synthStart()) { setUI(true); toast('给你放了段轻音乐 🎵', 'ok'); }
+        else { started = false; }
       });
     }
 
@@ -2515,16 +2535,8 @@
         }
         return;
       }
-      /* 第一次点击：先看有没有音频文件 */
-      tryFile(function (ok) {
-        if (ok) {
-          usingFile = true;
-          audioEl.play().then(function () { setUI(true); toast('正在播放 🎵', 'ok'); })
-            .catch(function () { setUI(false); toast('播放被浏览器拦下了，再点一次试试', 'bad'); });
-        } else {
-          if (synthStart()) { setUI(true); toast('给你放了段轻音乐 🎵', 'ok'); }
-        }
-      });
+      /* 第一次点击：直接走统一入口（内部处理文件 -> 合成音的回退） */
+      startPlaying();
     });
 
     /* 标签页切走时自动暂停，别吵到别人 */
